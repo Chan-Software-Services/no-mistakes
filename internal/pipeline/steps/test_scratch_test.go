@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,10 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/evidence"
+	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // The evidence turn writes driver scripts, fixtures and throwaway configs as
@@ -69,5 +73,29 @@ func TestPublishRunEvidence_NeverPublishesTheTestScratchDirectory(t *testing.T) 
 	}
 	if strings.Contains(tree, evidence.ScratchDirName+"/") || strings.Contains(tree, "driver.py") {
 		t.Fatalf("the test scratch directory reached the evidence branch:\n%s", tree)
+	}
+}
+
+// The scratch directory sits inside the run's evidence directory, and a Test
+// path artifact anywhere under that directory is pasted into the PR body as
+// text. A scratch file is never evidence, so naming one as an artifact must
+// neither embed it nor link it: the driver script holds the run's resource
+// names, which the PR must never show.
+func TestBuildTestingSummaryForPR_NeverEmbedsATestScratchFile(t *testing.T) {
+	evidenceRoot := filepath.Join(t.TempDir(), "evidence", "run-123")
+	driver := writeTempEvidenceFile(t, filepath.Join(evidenceRoot, evidence.ScratchDirName), "driver.py", []byte("compose -p demo-stack up\n"))
+	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"log","label":"Driver run","path":%q}]}`, driver)
+	steps := []*db.StepResult{
+		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
+	}
+	rounds := map[string][]*db.StepRound{
+		"s1": {{Round: 1, Trigger: "initial", FindingsJSON: &findings, DurationMS: 300}},
+	}
+
+	md := buildPRTestingSummary(steps, rounds, "git@github.com:example/widgets.git", "abc123", t.TempDir(), evidenceRoot, nil, scm.ProviderGitHub)
+	for _, leaked := range []string{"demo-stack", "driver.py", evidence.ScratchDirName + "/"} {
+		if strings.Contains(md, leaked) {
+			t.Fatalf("the PR testing summary showed the scratch file's %q:\n%s", leaked, md)
+		}
 	}
 }
