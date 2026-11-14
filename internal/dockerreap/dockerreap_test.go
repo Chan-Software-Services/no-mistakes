@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeDocker is an in-memory Docker that answers the CLI calls Reap makes the
@@ -342,11 +343,30 @@ func TestReapAndLogWarnsOnlyWhenSomethingWouldNotGo(t *testing.T) {
 			previous := slog.Default()
 			slog.SetDefault(slog.New(handler))
 			t.Cleanup(func() { slog.SetDefault(previous) })
-			reapAndLog(docker.run, []string{"RUN1"}, "test")
+			reapAndLog(docker.run, DefaultTimeout, []string{"RUN1"}, "test")
 			if !slices.Equal(levels, []slog.Level{tc.want}) {
 				t.Fatalf("logged levels %v, want one %v", levels, tc.want)
 			}
 		})
+	}
+}
+
+// An engine that hangs rather than refusing the connection can still hold the
+// run's labelled objects, and nothing reaps that run again once its worktree
+// is gone, so a check that ran out of the pass's time warns: it is not the
+// quiet "no engine running" case.
+func TestReapAndLogWarnsWhenTheEngineCheckRunsOutOfTime(t *testing.T) {
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, fmt.Errorf("docker %s: signal: killed", strings.Join(args, " "))
+	}
+	var levels []slog.Level
+	previous := slog.Default()
+	slog.SetDefault(slog.New(&levelRecorder{levels: &levels}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	reapAndLog(run, 50*time.Millisecond, []string{"RUN1"}, "test")
+	if !slices.Equal(levels, []slog.Level{slog.LevelWarn}) {
+		t.Fatalf("logged levels %v, want one %v", levels, slog.LevelWarn)
 	}
 }
 

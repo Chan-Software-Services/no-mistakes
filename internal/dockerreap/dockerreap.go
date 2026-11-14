@@ -37,7 +37,6 @@ import (
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
-	"github.com/kunchenguid/no-mistakes/internal/winproc"
 )
 
 // LabelKey is the Docker label that names the pipeline run an object belongs
@@ -54,10 +53,12 @@ func Label(runID string) string { return LabelKey + "=" + runID }
 var ErrNoDocker = errors.New("docker is not on PATH")
 
 // ErrEngineUnreachable is what Reap returns when the docker CLI is there but
-// no engine answers it (Docker Desktop quit, docker.service stopped). That is
-// a normal state of a machine, and no run can have started a container on an
-// engine that is not running, so it is reported apart from a failed removal,
-// which is the one that matters.
+// its engine refuses or fails the check (Docker Desktop quit, docker.service
+// stopped). That is a normal state of a machine, and no run can have started a
+// container on an engine that is not running, so it is reported apart from a
+// failed removal, which is the one that matters. A check that hangs until the
+// pass runs out of time is not this: that engine may be running and holding
+// the run's objects.
 var ErrEngineUnreachable = errors.New("docker engine is not answering")
 
 // Runner runs one Docker CLI call and returns its standard output.
@@ -101,9 +102,10 @@ var kinds = []kind{
 // Reap removes every container, network and volume labelled as one of
 // runIDs' and reports what it removed. An empty run ID is ignored, so a label
 // with no value never matches. Docker being absent is not an error; an engine
-// that does not answer is ErrEngineUnreachable, checked once before anything
-// is listed; a listing or removal that fails once the engine answered, and
-// anything still there after removal, is an error.
+// that refuses or fails the one check made before anything is listed is
+// ErrEngineUnreachable; a check that runs out of ctx's time, a listing or
+// removal that fails once the engine answered, and anything still there after
+// removal, is an error.
 //
 // Each kind is listed once for all the runs, so reaping many runs costs the
 // same number of listings as reaping one.
@@ -121,6 +123,12 @@ func Reap(ctx context.Context, run Runner, runIDs []string) (Removed, error) {
 	if _, err := run(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
 		if errors.Is(err, ErrNoDocker) {
 			return removed, nil
+		}
+		// An engine that hangs rather than refusing the connection may be
+		// holding the run's objects, and nothing reaps this run again, so a
+		// check that ran out of the pass's time is a real failure.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return removed, fmt.Errorf("docker engine check did not finish: %w (%v)", ctxErr, err)
 		}
 		return removed, fmt.Errorf("%w: %w", ErrEngineUnreachable, err)
 	}
@@ -197,17 +205,15 @@ func listLabelled(ctx context.Context, run Runner, k kind, wanted map[string]boo
 // is none. A failed call's error carries its standard error, which is where
 // Docker says why. It runs as the daemon's other one-shot commands do
 // (shellenv.ConfigureShellCommand and OutputShellCommand), so the call's
-// process tree is reaped and a child holding the stdout pipe cannot hold Reap
-// past its context's deadline.
+// process tree is reaped, a child holding the stdout pipe cannot hold Reap
+// past its context's deadline, and on Windows the console-less daemon's child
+// is hardened (ConfigureShellCommand calls winproc.Harden).
 func DockerCLI(ctx context.Context, args ...string) ([]byte, error) {
 	path, err := exec.LookPath("docker")
 	if err != nil {
 		return nil, ErrNoDocker
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
-	// The daemon runs console-less on Windows, where an unhardened console
-	// child flashes a window.
-	winproc.Harden(cmd)
 	// OutputShellCommand captures stdout only, so stderr is captured here.
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -234,16 +240,17 @@ const DefaultTimeout = 10 * time.Second
 // best effort by design: a run's result must never fail over its cleanup.
 // reason says which cleanup route called it.
 func ReapAndLog(runIDs []string, reason string) {
-	reapAndLog(DockerCLI, runIDs, reason)
+	reapAndLog(DockerCLI, DefaultTimeout, runIDs, reason)
 }
 
-// reapAndLog is ReapAndLog with the Runner given, for tests. An engine that
+// reapAndLog is ReapAndLog with the Runner and the pass's timeout given, for
+// tests. An engine that
 // does not answer is logged at debug level: it is a normal state of the
 // machine, and a warning at every run end and every daemon start would train
 // the operator to ignore the warning that matters, a labelled object that
 // would not go.
-func reapAndLog(run Runner, runIDs []string, reason string) {
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+func reapAndLog(run Runner, timeout time.Duration, runIDs []string, reason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	removed, err := Reap(ctx, run, runIDs)
 	if !removed.Empty() {
