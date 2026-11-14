@@ -221,6 +221,7 @@ Runs linters and static analysis.
 - In both agent passes the agent is told to run each formatter and linter the way the project's own scripts and CI run it, as the [Document](#document) step's agent is, to check, fix, and report only the files the change touches (in the combined pass, plus the files its documentation duty edits), and to give each finding's file relative to the repository root.
 - Whatever the agent reports, an `error` or `warning` lint finding whose file is tracked at the current head but outside the change (the files changed between the branch base and the current head) is kept as an `info` finding with `action: no-op`, so a problem the change did not introduce never parks the run.
   A finding with no file, or with a path that does not name a tracked file as written from the repository root (a directory, a path relative to a subdirectory, a `file:line` spelling), keeps its severity.
+  So does a path that a changed file's path ends with (`package.json` when the change touches `front-end/package.json`), even when the repository also tracks a file at that root path, because a tool run from `front-end/` reports the changed file that way.
 - Bounds those agent turns, including a configured-lint repair turn, with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
 
 **Approval:** lint findings with `action: ask-user` pause for approval.

@@ -250,6 +250,28 @@ func TestScopeLintFindingsToChange(t *testing.T) {
 		}
 	}
 
+	// A subdirectory-relative spelling of a changed file can also name a
+	// different, untouched file at the root: from front-end/, Prettier prints
+	// package.json for a touched front-end/package.json while the repository
+	// also tracks a root package.json. Such a path may be the changed file, so
+	// it keeps its severity; a root file no changed path ends in is demoted.
+	monoChanged := []string{"front-end/package.json"}
+	monoTracked := []string{"front-end/package.json", "package.json", "README.md"}
+	for _, tc := range []struct {
+		file    string
+		demoted bool
+	}{
+		{file: "package.json", demoted: false},
+		{file: "./package.json", demoted: false},
+		{file: "README.md", demoted: true},
+	} {
+		in := Findings{Items: []Finding{{ID: "lint-1", Severity: types.FindingSeverityWarning, File: tc.file, Description: "fails", Action: types.ActionAskUser}}}
+		out, demoted := scopeLintFindingsToChange(in, monoChanged, monoTracked, workDir)
+		if (demoted > 0) != tc.demoted || (out.Items[0].Severity == types.FindingSeverityInfo) != tc.demoted {
+			t.Errorf("monorepo file %q: demoted=%v severity=%q, want demoted=%v", tc.file, demoted, out.Items[0].Severity, tc.demoted)
+		}
+	}
+
 	info := Findings{Items: []Finding{{ID: "lint-1", Severity: types.FindingSeverityInfo, File: "docs/OPERATIONS.md", Description: "note", Action: types.ActionNoOp}}}
 	if out, demoted := scopeLintFindingsToChange(info, changed, tracked, workDir); demoted > 0 || out.Items[0] != info.Items[0] {
 		t.Errorf("an informational finding outside the change must pass through untouched, got %+v", out.Items[0])

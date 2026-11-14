@@ -71,8 +71,10 @@ func lintScopePaths(ctx context.Context, workDir, baseSHA string) (changed, trac
 // but never parks the run. Every other finding stays as reported: with no
 // file, or a path that is not a tracked file as written (a directory, a path
 // relative to a subdirectory, a bare file name, a file:line spelling), the
-// step cannot tell it is outside the change, so it fails toward parking. It
-// returns how many findings it demoted.
+// step cannot tell it is outside the change, so it fails toward parking. So
+// does a tracked root path that a changed path ends with (package.json for a
+// changed front-end/package.json), since a tool run from that subdirectory
+// prints the changed file that way. It returns how many findings it demoted.
 func scopeLintFindingsToChange(findings Findings, changed, tracked []string, workDir string) (Findings, int) {
 	inChange := normalizedPathSet(changed)
 	atHead := normalizedPathSet(tracked)
@@ -84,7 +86,7 @@ func scopeLintFindingsToChange(findings Findings, changed, tracked []string, wor
 			continue
 		}
 		file, known := lintFindingPath(f.File, workDir)
-		if !known || !atHead[file] || inChange[file] {
+		if !known || !atHead[file] || inChange[file] || endsAChangedPath(file, inChange) {
 			continue
 		}
 		items[i].Severity = types.FindingSeverityInfo
@@ -94,6 +96,18 @@ func scopeLintFindingsToChange(findings Findings, changed, tracked []string, wor
 	}
 	findings.Items = items
 	return findings, demoted
+}
+
+// endsAChangedPath reports whether some changed path is file below a
+// subdirectory, so file may be that changed file spelled relative to it.
+func endsAChangedPath(file string, inChange map[string]bool) bool {
+	suffix := "/" + file
+	for changed := range inChange {
+		if strings.HasSuffix(changed, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizedPathSet(paths []string) map[string]bool {
