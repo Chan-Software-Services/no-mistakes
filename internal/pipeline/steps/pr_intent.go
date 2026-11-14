@@ -68,15 +68,17 @@ func prDraftIntentPromptSection(sctx *pipeline.StepContext) string {
 	return userIntentPromptSection(sctx)
 }
 
-// omittedIntentDisclosureSection is the intent's Disclosure section, sanitized
+// omittedIntentDisclosureSection is the intent's Disclosure rules, sanitized
 // like the intent and bound by omittedIntentDisclosureClause, or "" when the
-// intent has none.
+// intent has none. It reads intent.DisclosureRules, not the wider
+// SplitDisclosure the PR body removes: a section that only names the
+// vulnerability class ("Information disclosure in error pages") describes the
+// change this omission withholds, so it is never handed over as the rules.
 func omittedIntentDisclosureSection(sctx *pipeline.StepContext) string {
 	if sctx == nil {
 		return ""
 	}
-	_, disclosure := intent.SplitDisclosure(sctx.UserIntent)
-	cleaned := cleanIntentText(disclosure)
+	cleaned := cleanIntentText(intent.DisclosureRules(sctx.UserIntent))
 	if cleaned == "" {
 		return ""
 	}

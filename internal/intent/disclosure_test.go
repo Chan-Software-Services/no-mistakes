@@ -191,6 +191,36 @@ func TestSplitDisclosure(t *testing.T) {
 			disclosure: "",
 		},
 		{
+			name:       "bold label of more words alone on its line",
+			in:         "Goal.\n\n**Disclosure rules**\n\n- never say \"stolen\"\n\nKeep it.",
+			rest:       "Goal.\n\nKeep it.",
+			disclosure: "**Disclosure rules**\n\n- never say \"stolen\"",
+		},
+		{
+			name:       "plain label of more words alone on its line",
+			in:         "Goal.\n\nPublic disclosure rules\n- never say \"stolen\"\n\nKeep it.",
+			rest:       "Goal.\n\nKeep it.",
+			disclosure: "Public disclosure rules\n- never say \"stolen\"",
+		},
+		{
+			name:       "label followed by an unspaced em dash",
+			in:         "Goal.\n\nDisclosure\u2014never say \"stolen\".\n\nKeep it.",
+			rest:       "Goal.\n\nKeep it.",
+			disclosure: "Disclosure\u2014never say \"stolen\".",
+		},
+		{
+			name:       "phrase label followed by an unspaced en dash",
+			in:         "Goal.\n\nDisclosure rules\u2013never say \"stolen\".\n\nKeep it.",
+			rest:       "Goal.\n\nKeep it.",
+			disclosure: "Disclosure rules\u2013never say \"stolen\".",
+		},
+		{
+			name:       "a vulnerability heading is still removed from the body",
+			in:         "Goal.\n\n## Information disclosure fix\n\nThe error page printed X.\n\n## Notes\n\nKeep it.",
+			rest:       "Goal.\n\n## Notes\n\nKeep it.",
+			disclosure: "## Information disclosure fix\n\nThe error page printed X.",
+		},
+		{
 			name:       "an ordinary quote is kept",
 			in:         "Goal.\n\n> The disclosure of a token is now impossible.\n\nKeep it.",
 			rest:       "Goal.\n\n> The disclosure of a token is now impossible.\n\nKeep it.",
@@ -210,6 +240,57 @@ func TestSplitDisclosure(t *testing.T) {
 			}
 			if disclosure != tc.disclosure {
 				t.Errorf("disclosure:\n got %q\nwant %q", disclosure, tc.disclosure)
+			}
+		})
+	}
+}
+
+// DisclosureRules is what the PR-drafting turns get under the caller-side
+// omission, so it must err the other way from SplitDisclosure: a section
+// whose heading or label only names a vulnerability class ("Information
+// disclosure") is removed from the PR body but is never handed over as the
+// rules, since it describes the change the omission withholds. A real
+// Disclosure section inside such a section is still found.
+func TestDisclosureRules(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		in    string
+		rules string
+	}{
+		{name: "heading", in: "Goal.\n\n## Disclosure\n\nSay hardening only.\n\n## Notes\n\nKeep it.", rules: "## Disclosure\n\nSay hardening only."},
+		{name: "rules heading", in: "## Disclosure rules\n\nSay hardening only.", rules: "## Disclosure rules\n\nSay hardening only."},
+		{name: "policy heading", in: "## Disclosure policy\n\nSay hardening only.", rules: "## Disclosure policy\n\nSay hardening only."},
+		{name: "qualified heading", in: "## Public disclosure\n\nSay hardening only.", rules: "## Public disclosure\n\nSay hardening only."},
+		{name: "numbered heading", in: "## 3. Disclosure\n\nSay hardening only.", rules: "## 3. Disclosure\n\nSay hardening only."},
+		{name: "label", in: "Goal.\n\nDisclosure: say hardening only.", rules: "Disclosure: say hardening only."},
+		{name: "phrase label", in: "Disclosure rules: say hardening only.", rules: "Disclosure rules: say hardening only."},
+		{name: "bold label with a parenthetical", in: "**Disclosure** (public repository): say hardening only.", rules: "**Disclosure** (public repository): say hardening only."},
+		{name: "label alone on its line", in: "**Disclosure rules**\n\n- say hardening only", rules: "**Disclosure rules**\n\n- say hardening only"},
+		{name: "list item", in: "- Goal.\n- Disclosure: say hardening only.", rules: "- Disclosure: say hardening only."},
+		{name: "quoted label", in: "> Disclosure: say hardening only.", rules: "> Disclosure: say hardening only."},
+		{name: "unspaced em dash", in: "Disclosure\u2014say hardening only.", rules: "Disclosure\u2014say hardening only."},
+		{name: "vulnerability heading", in: "Goal.\n\n## Information disclosure fix\n\nThe error page printed X.\n\n## Notes\n\nKeep it.", rules: ""},
+		{name: "vulnerability title", in: "# Stop token disclosure in logs\n\nTokens were logged.", rules: ""},
+		{name: "vulnerability label", in: "Information disclosure: the error page printed the stack trace.", rules: ""},
+		{name: "vulnerability line alone", in: "Information disclosure fix\n\nThe error page printed X.", rules: ""},
+		{
+			name:  "a real section inside a vulnerability heading's section",
+			in:    "# Stop information disclosure in error pages\n\nThe error page printed the stack trace.\n\n## Disclosure\n\nSay hardening only.",
+			rules: "## Disclosure\n\nSay hardening only.",
+		},
+		{
+			name:  "a real label beside a vulnerability label",
+			in:    "Information disclosure: the error page printed the stack trace.\n\nDisclosure: say hardening only.",
+			rules: "Disclosure: say hardening only.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DisclosureRules(tc.in); got != tc.rules {
+				t.Errorf("rules:\n got %q\nwant %q", got, tc.rules)
+			}
+			if _, disclosure := SplitDisclosure(tc.in); disclosure == "" {
+				t.Errorf("SplitDisclosure no longer removes %q from the PR body", tc.in)
 			}
 		})
 	}

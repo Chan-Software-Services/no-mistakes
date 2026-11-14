@@ -197,3 +197,34 @@ func TestPRDraftingUnderOmissionStillFollowsTheDisclosure(t *testing.T) {
 		})
 	}
 }
+
+// Under the omission the drafting turns get the Disclosure rules alone. A
+// security change's intent usually names its vulnerability class in a heading
+// ("information disclosure"), which the PR body removes but which is the very
+// description the omission withholds, so it never reaches the drafting turns
+// as "the rules".
+func TestPRDraftingUnderOmissionNeverGetsAVulnerabilityHeadingAsTheRules(t *testing.T) {
+	t.Parallel()
+	dir, base, head := setupGitRepo(t)
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		return &agent.Result{Output: json.RawMessage(`{"title":"fix: error pages","body":"## What Changed\n\n- Error pages are plainer."}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, base, head, config.Commands{})
+	sctx.UserIntent = "# Stop information disclosure in error pages\n\nThe error page printed the session store's stack trace.\n\n## Disclosure\n\nSay hardening only."
+	sctx.IntentSource = "agent"
+	sctx.Run.OmitIntent = true
+	if _, err := (&PRStep{}).buildPRContent(sctx, "feature", "main", sctx.Run.BaseSHA, scm.ProviderGitHub, 0); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.calls) == 0 {
+		t.Fatal("no drafting turn ran")
+	}
+	for i, call := range ag.calls {
+		if !strings.Contains(call.Prompt, "Say hardening only.") {
+			t.Errorf("drafting turn %d lost the Disclosure rules:\n%s", i, call.Prompt)
+		}
+		if strings.Contains(call.Prompt, "printed the session store's stack trace") {
+			t.Errorf("drafting turn %d received the withheld description as the rules:\n%s", i, call.Prompt)
+		}
+	}
+}

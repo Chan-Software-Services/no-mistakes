@@ -22,44 +22,106 @@ import (
 //     or higher;
 //   - a paragraph, list item or block quote that starts with a label: the
 //     word itself ("Disclosure:", "**Disclosure**", "Disclosure (...)",
-//     "Disclosure - ..."), or a short phrase holding the word before a colon
-//     or a spaced dash ("Disclosure rules:"), up to the end of that block (a
-//     list item ends at its next sibling item, a quote takes all of itself);
-//     a label with nothing after it also takes the one block that follows it.
+//     "Disclosure - ...", "Disclosure<em dash>..."), or a short phrase holding
+//     the word, alone on its line or before a colon or a dash ("Disclosure
+//     rules:", "**Disclosure rules**"), up to the end of that block (a list
+//     item ends at its next sibling item, a quote takes all of itself); a
+//     label with nothing after it also takes the one block that follows it.
 //
 // Fenced code is never read as a heading or a label. Every section found is
 // returned, joined by a blank line; rest keeps everything else in order, with
 // line endings normalized to "\n". With no section, rest is the normalized
 // input and disclosure is "".
 //
+// DisclosureRules reads the same sections the other way, for the one outlet
+// where too much is the leak.
+//
 // Recognition errs toward removal: a label that starts a line inside a
 // paragraph still starts a section, because a line kept out of the PR body by
 // mistake costs nothing while a published rule cannot be taken back.
 func SplitDisclosure(text string) (rest, disclosure string) {
+	lines, fenced := disclosureLines(text)
+	var kept []string
+	var sections []string
+	next := 0
+	for _, sec := range disclosureSections(lines, fenced, 0, len(lines)) {
+		kept = append(kept, lines[next:sec.start]...)
+		sections = append(sections, sec.text(lines))
+		next = sec.next
+	}
+	if len(sections) == 0 {
+		return strings.Join(lines, "\n"), ""
+	}
+	kept = append(kept, lines[next:]...)
+	return strings.Trim(strings.Join(kept, "\n"), "\n"), strings.Join(sections, "\n\n")
+}
+
+// DisclosureRules returns the Disclosure sections that read as rules, joined
+// by a blank line, or "". It is the text the PR-drafting turns get under the
+// caller-side omission, which withholds the rest of the intent, so it errs
+// the other way from SplitDisclosure: a heading or label counts only when it
+// is the word alone or one of the named rules shapes ("Disclosure",
+// "Disclosure rules", "Disclosure policy", "Public disclosure"; numbered,
+// emphasised, with a parenthetical or a colon), never a phrase that merely
+// holds the word, such as a vulnerability class ("Information disclosure in
+// error pages"), which describes the very change the omission withholds.
+// SplitDisclosure still removes such a section from the PR body; a rules
+// section inside one is still found here.
+func DisclosureRules(text string) string {
+	lines, fenced := disclosureLines(text)
+	return strings.Join(disclosureRuleTexts(lines, fenced, 0, len(lines)), "\n\n")
+}
+
+func disclosureRuleTexts(lines []string, fenced []fence, from, to int) []string {
+	var rules []string
+	for _, sec := range disclosureSections(lines, fenced, from, to) {
+		if sec.rules {
+			rules = append(rules, sec.text(lines))
+			continue
+		}
+		rules = append(rules, disclosureRuleTexts(lines, fenced, sec.bodyStart, sec.end)...)
+	}
+	return rules
+}
+
+// section is one Disclosure section: lines[start:end], with next past the
+// blank lines after it and bodyStart past its heading or label line; rules
+// says whether its heading or label reads as rules (DisclosureRules).
+type section struct {
+	start, bodyStart, end, next int
+	rules                       bool
+}
+
+func (s section) text(lines []string) string {
+	return strings.Trim(strings.Join(lines[s.start:s.end], "\n"), "\n")
+}
+
+func disclosureLines(text string) ([]string, []fence) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
-	fenced := fencedLines(lines)
+	return lines, fencedLines(lines)
+}
 
-	var kept []string
-	var sections []string
-	for i := 0; i < len(lines); {
-		end := disclosureEnd(lines, fenced, i)
+// disclosureSections finds every Disclosure section that starts in
+// lines[from:to], each cut off at to.
+func disclosureSections(lines []string, fenced []fence, from, to int) []section {
+	var sections []section
+	for i := from; i < to; {
+		end, bodyStart, rules := disclosureEnd(lines, fenced, i)
 		if end <= i {
-			kept = append(kept, lines[i])
 			i++
 			continue
 		}
-		sections = append(sections, strings.Trim(strings.Join(lines[i:end], "\n"), "\n"))
-		for end < len(lines) && isBlank(lines[end]) {
-			end++
+		end = min(end, to)
+		next := end
+		for next < to && isBlank(lines[next]) {
+			next++
 		}
-		i = end
+		sections = append(sections, section{start: i, bodyStart: min(bodyStart, end), end: end, next: next, rules: rules})
+		i = next
 	}
-	if len(sections) == 0 {
-		return text, ""
-	}
-	return strings.Trim(strings.Join(kept, "\n"), "\n"), strings.Join(sections, "\n\n")
+	return sections
 }
 
 var (
@@ -69,43 +131,67 @@ var (
 	fenceRe          = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
 	listItemRe       = regexp.MustCompile(`^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)`)
 	disclosureWordRe = regexp.MustCompile(`(?i)\bdisclosure\b`)
-	disclosureLbRe   = regexp.MustCompile(`(?i)^(?:\*\*|__)?disclosure(?:\*\*|__)?(?:[ \t]*\([^)]*\))?[ \t]*(?::[ \t]*(?:\*\*|__)?|[ \t]+[-\x{2013}\x{2014}][ \t]+|$)`)
+	disclosureLbRe   = regexp.MustCompile(`(?i)^(?:\*\*|__)?disclosure(?:\*\*|__)?(?:[ \t]*\([^)]*\))?` + labelEndRe)
 	// phraseLbRe is a label of a few words ("Disclosure rules:"), which
 	// counts only when the words hold disclosure (disclosureWordRe) and a
-	// colon or a spaced dash ends them, so prose that merely starts with the
-	// word is never a label.
-	phraseLbRe = regexp.MustCompile(`^(?:\*\*|__)?([^:.!?()*_\x{2013}\x{2014}]{1,60}?)(?:\*\*|__)?(?:[ \t]*\([^)]*\))?(?:[ \t]*:[ \t]*(?:\*\*|__)?|[ \t]+[-\x{2013}\x{2014}][ \t]+)`)
-	quoteRe    = regexp.MustCompile(`^ {0,3}>`)
-	quoteMkRe  = regexp.MustCompile(`^(?:[ \t]*>[ \t]?)+`)
+	// colon, a dash, or the end of the line ends them, so prose that merely
+	// starts with the word is never a label.
+	phraseLbRe = regexp.MustCompile(`^(?:\*\*|__)?([^:.!?()*_\x{2013}\x{2014}]{1,60}?)(?:\*\*|__)?(?:[ \t]*\([^)]*\))?` + labelEndRe)
+	// rulesTitleRe is a heading title or label that reads as rules
+	// (DisclosureRules), once normalized by rulesTitle.
+	rulesTitleRe   = regexp.MustCompile(`^(?:public )?disclosure(?: rules| policy)?$`)
+	numberPrefixRe = regexp.MustCompile(`^\d{1,9}[.)][ \t]*`)
+	parentheticRe  = regexp.MustCompile(`[ \t]*\([^)]*\)`)
+	quoteRe        = regexp.MustCompile(`^ {0,3}>`)
+	quoteMkRe      = regexp.MustCompile(`^(?:[ \t]*>[ \t]?)+`)
 )
 
+// labelEndRe ends a label: a colon (and the emphasis that closes it), a
+// hyphen between spaces, an en or em dash with or without spaces, or the end
+// of the line, which makes the label one with nothing after it.
+const labelEndRe = `(?:[ \t]*:[ \t]*(?:\*\*|__)?|[ \t]+-[ \t]+|[ \t]*[\x{2013}\x{2014}][ \t]*|[ \t]*$)`
+
+// rulesTitle normalizes a heading title or label for rulesTitleRe: no
+// emphasis, numbering, parenthetical, or trailing colon, lower case, single
+// spaces.
+func rulesTitle(title string) string {
+	title = headingTitle(title)
+	title = numberPrefixRe.ReplaceAllString(title, "")
+	title = parentheticRe.ReplaceAllString(title, "")
+	title = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(title), ":"))
+	return strings.ToLower(strings.Join(strings.Fields(title), " "))
+}
+
 // disclosureEnd returns the end (exclusive) of the Disclosure section that
-// starts at line i, or i when no section starts there.
-func disclosureEnd(lines []string, fenced []fence, i int) int {
+// starts at line i, or i when no section starts there, with the first line of
+// its body and whether its heading or label reads as rules.
+func disclosureEnd(lines []string, fenced []fence, i int) (end, bodyStart int, rules bool) {
 	if fenced[i] != fenceNone {
-		return i
+		return i, i, false
 	}
 	if level, title, ok := headingAt(lines, fenced, i); ok {
 		if !disclosureWordRe.MatchString(headingTitle(title)) {
-			return i
+			return i, i, false
 		}
 		j := i + 1
 		if !atxHeadingRe.MatchString(lines[i]) {
 			j = i + 2 // a setext heading's underline
 		}
+		bodyStart = j
 		for ; j < len(lines); j++ {
 			if next, _, ok := headingAt(lines, fenced, j); ok && next <= level {
 				break
 			}
 		}
-		return j
+		return j, bodyStart, rulesTitleRe.MatchString(rulesTitle(title))
 	}
 	return labelEnd(lines, fenced, i)
 }
 
-// labelEnd returns the end of a labelled Disclosure paragraph or list item
-// starting at line i, or i when line i carries no label.
-func labelEnd(lines []string, fenced []fence, i int) int {
+// labelEnd returns the end of a labelled Disclosure paragraph, list item or
+// block quote starting at line i, or i when line i carries no label, with the
+// line after the label's and whether the label reads as rules.
+func labelEnd(lines []string, fenced []fence, i int) (int, int, bool) {
 	line := lines[i]
 	quoted := quoteRe.MatchString(line)
 	if quoted {
@@ -113,9 +199,9 @@ func labelEnd(lines []string, fenced []fence, i int) int {
 	}
 	item := listItemRe.FindString(line)
 	content := strings.TrimSpace(line[len(item):])
-	match := disclosureLabel(content)
+	match, rules := disclosureLabel(content)
 	if match == "" {
-		return i
+		return i, i, false
 	}
 	indent := indentWidth(line)
 	needBlock := strings.TrimSpace(content[len(match):]) == ""
@@ -137,7 +223,7 @@ func labelEnd(lines []string, fenced []fence, i int) int {
 			sawContent = true
 		}
 		if !needBlock || sawContent || j >= len(lines) || !isBlank(lines[j]) {
-			return j
+			return j, i + 1, rules
 		}
 		indent, item = 0, ""
 	}
@@ -164,21 +250,23 @@ func labelEnd(lines []string, fenced []fence, i int) int {
 		}
 		sawBlank, sawContent = false, true
 	}
-	return j
+	return j, i + 1, rules
 }
 
-// disclosureLabel returns the Disclosure label that starts content, or "":
-// the word itself ("Disclosure:", "**Disclosure**", "Disclosure (...)"),
-// alone or before a colon or a spaced dash, or a short phrase holding the
-// word before one ("Disclosure rules:").
-func disclosureLabel(content string) string {
+// disclosureLabel returns the Disclosure label that starts content, or "",
+// and whether it reads as rules (rulesTitleRe): the word itself
+// ("Disclosure:", "**Disclosure**", "Disclosure (...)", "Disclosure - ..."),
+// alone or before a colon or a dash, or a short phrase holding the word,
+// alone on its line or before one ("Disclosure rules:", "**Disclosure
+// rules**").
+func disclosureLabel(content string) (string, bool) {
 	if match := disclosureLbRe.FindString(content); match != "" {
-		return match
+		return match, true
 	}
 	if m := phraseLbRe.FindStringSubmatch(content); m != nil && disclosureWordRe.MatchString(m[1]) {
-		return m[0]
+		return m[0], rulesTitleRe.MatchString(rulesTitle(m[1]))
 	}
-	return ""
+	return "", false
 }
 
 // headingAt reports whether line i opens an ATX heading or is the text line
