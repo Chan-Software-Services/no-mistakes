@@ -280,6 +280,12 @@ Control publication of the **generated `Intent` section**, independently of inte
 
 A contributor can keep the section off for their own runs without touching this repository policy: `axi run --no-publish-intent` records a tighten-only omission on the run, and an operator can set the global `intent.publish_intent: false` default. Both compose with this field and can only reduce publication: the trusted repository policy is the ceiling, and a caller can never publish intent on a repository whose trusted config disabled it. Neither signal changes what review, test, document, lint, or CI auto-fix prompts receive. The caller-side omission goes one step further than this repository policy: the PR-drafting turns (ordinary narrative, title-only fallback, and repository-template narrative) receive no intent text at all and draft from the diff and commit messages only, so no paraphrase of the withheld intent can reach the public PR. The intent is withheld, never scanned for: there is no output filter.
 
+Whatever these controls say, the section never carries the intent's Disclosure section.
+A Disclosure section is a heading titled `Disclosure`, or a paragraph or list item that starts with the label `Disclosure:` or `**Disclosure**`, and it holds the rules for what public text may say about the change, which usually name the very words they bar.
+The PR body publishes the rest of the intent; an intent that is only a Disclosure section publishes no Intent section.
+Every step prompt still receives the whole intent, Disclosure included, with a rule that the section governs everything the step writes that may be published and is never quoted or restated.
+That rule is prompt guidance for drafted text, not an output filter.
+
 This is not a privacy filter: generated narrative and other evidence can still contain sensitive information, and LLM drafting is not a confidentiality guarantee. No caller-written public-body override is introduced by this setting.
 
 ### pr.title_format

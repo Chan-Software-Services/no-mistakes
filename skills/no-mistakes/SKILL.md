@@ -136,6 +136,12 @@ asked for that might otherwise look surprising in the diff. A few sentences to a
 short paragraph is normal - write down what you learned from the conversation
 that a reviewer reading only the diff would not know.
 
+When some wording about the change must never be published (a security change
+in a public repository, say), put those rules in a section headed
+`Disclosure`, or a paragraph that starts `Disclosure:`. Every step follows it, and
+the PR body's Intent section leaves it out, but the rest of the intent can be
+published there, so keep what the rules bar out of the rest of it.
+
 ## Validate and decide
 
 Run the pipeline and decide on its findings as they come up:

@@ -11,6 +11,10 @@ import (
 // policy compose here and nowhere else. The text is media-neutralized
 // (neutralizePRMedia) because it is published.
 //
+// The intent's Disclosure section is never published, whatever either
+// control says (publishableUserIntent): it holds the rules for what public
+// text may say, and those rules name the words they bar.
+//
 // The control is tighten-only in both directions:
 //
 //   - The repository's trusted pr.publish_intent (default true) is the
@@ -35,7 +39,7 @@ func publicPRIntent(sctx *pipeline.StepContext) string {
 	if runOmitsIntent(sctx) {
 		return ""
 	}
-	return neutralizePRMedia(cleanedUserIntent(sctx))
+	return neutralizePRMedia(publishableUserIntent(sctx))
 }
 
 // runOmitsIntent reports whether this run was started with the caller-side,

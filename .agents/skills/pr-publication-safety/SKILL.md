@@ -17,6 +17,12 @@ metadata:
 - Neutralize at the assembly choke point (`appendGeneratedSectionsToCleanBodyWithinLimit` plus the two intent paths), never per render path. `pipelineMD` alone carries the real marker and is left intact; `BuildPipelineSummaryFor` neutralizes its own step-detail blocks, which quote agent text. A first attempt put this in `escapePipelineFoldMarkers` - per-render-path - and shipped three live foreign markers to #831 anyway. Regressions: `TestPRStep_ForeignAttestationsInEveryComponentDoNotShadowTheRealOne` (all components at once), plus the per-component guards in `pr_test.go`.
 - Regressions: `internal/safepath/redact_test.go`, `internal/pipeline/steps/pr_homepath_test.go`.
 
+**An Intent's Disclosure Section Is Never Published**
+
+- `intent.SplitDisclosure` is the one recognizer of an intent's Disclosure section (a heading titled `Disclosure`, or a paragraph or list item labelled `Disclosure:`), and `publicPRIntent` publishes only `publishableUserIntent`, the intent without it, on every Intent-section path (ordinary, fallback, template appendix). The split runs on the raw intent, before `sanitizePromptMultilineText` collapses the indentation that bounds a list item. Recognition errs toward removal.
+- Step prompts keep the whole intent, Disclosure included, because the section governs what each step writes; `userIntentPromptSection` adds `disclosurePromptClause` only when one is present, so a prompt without one is byte-for-byte unchanged. That clause is prompt guidance, not an output filter: no scanner looks for barred words in drafted text.
+- Regressions: `internal/intent/disclosure_test.go`, `TestPRBodyNeverPublishesTheIntentsDisclosureSection`, `TestUserIntentPromptSectionBindsPublishedTextToTheDisclosure` (`pr_disclosure_test.go`).
+
 **No Image or Video in a PR Body (any provider, any flavor)**
 
 - The PR step writes a PR's title and body and nothing else: it uploads no file and posts no comment. No SCM host has a comment-writing or upload method (`TestHostsCannotPostCommentsOrUploadFiles` in `internal/scm/nopost_test.go` reflects over all six); a new one is a deliberate change to that test.
