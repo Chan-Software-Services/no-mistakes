@@ -36,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 	"github.com/kunchenguid/no-mistakes/internal/winproc"
 )
 
@@ -51,6 +52,13 @@ func Label(runID string) string { return LabelKey + "=" + runID }
 // Reap treats it as nothing to reap: a machine without Docker has no
 // container a run could have left.
 var ErrNoDocker = errors.New("docker is not on PATH")
+
+// ErrEngineUnreachable is what Reap returns when the docker CLI is there but
+// no engine answers it (Docker Desktop quit, docker.service stopped). That is
+// a normal state of a machine, and no run can have started a container on an
+// engine that is not running, so it is reported apart from a failed removal,
+// which is the one that matters.
+var ErrEngineUnreachable = errors.New("docker engine is not answering")
 
 // Runner runs one Docker CLI call and returns its standard output.
 type Runner func(ctx context.Context, args ...string) ([]byte, error)
@@ -92,8 +100,10 @@ var kinds = []kind{
 
 // Reap removes every container, network and volume labelled as one of
 // runIDs' and reports what it removed. An empty run ID is ignored, so a label
-// with no value never matches. Docker being absent is not an error; Docker not
-// answering, and anything still there after removal, is.
+// with no value never matches. Docker being absent is not an error; an engine
+// that does not answer is ErrEngineUnreachable, checked once before anything
+// is listed; a listing or removal that fails once the engine answered, and
+// anything still there after removal, is an error.
 //
 // Each kind is listed once for all the runs, so reaping many runs costs the
 // same number of listings as reaping one.
@@ -107,6 +117,12 @@ func Reap(ctx context.Context, run Runner, runIDs []string) (Removed, error) {
 	var removed Removed
 	if len(wanted) == 0 {
 		return removed, nil
+	}
+	if _, err := run(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
+		if errors.Is(err, ErrNoDocker) {
+			return removed, nil
+		}
+		return removed, fmt.Errorf("%w: %w", ErrEngineUnreachable, err)
 	}
 	var errs []error
 	for _, k := range kinds {
@@ -179,7 +195,10 @@ func listLabelled(ctx context.Context, run Runner, k kind, wanted map[string]boo
 
 // DockerCLI runs the docker binary on PATH, or returns ErrNoDocker when there
 // is none. A failed call's error carries its standard error, which is where
-// Docker says why.
+// Docker says why. It runs as the daemon's other one-shot commands do
+// (shellenv.ConfigureShellCommand and OutputShellCommand), so the call's
+// process tree is reaped and a child holding the stdout pipe cannot hold Reap
+// past its context's deadline.
 func DockerCLI(ctx context.Context, args ...string) ([]byte, error) {
 	path, err := exec.LookPath("docker")
 	if err != nil {
@@ -189,9 +208,11 @@ func DockerCLI(ctx context.Context, args ...string) ([]byte, error) {
 	// The daemon runs console-less on Windows, where an unhardened console
 	// child flashes a window.
 	winproc.Harden(cmd)
+	// OutputShellCommand captures stdout only, so stderr is captured here.
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.OutputShellCommand(cmd)
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			return out, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, msg)
@@ -204,7 +225,8 @@ func DockerCLI(ctx context.Context, args ...string) ([]byte, error) {
 // DefaultTimeout bounds one ReapAndLog pass, so a Docker that does not answer
 // cannot hold a run's cleanup, or the daemon's startup, whose readiness budget
 // it shares with the rest of recovery, for long. A pass that answers takes well
-// under a second: three listings, and removals only of what they found.
+// under a second: a version check, three listings, and removals only of what
+// they found.
 const DefaultTimeout = 10 * time.Second
 
 // ReapAndLog reaps the given runs' Docker objects with the docker CLI, bounded
@@ -212,14 +234,26 @@ const DefaultTimeout = 10 * time.Second
 // best effort by design: a run's result must never fail over its cleanup.
 // reason says which cleanup route called it.
 func ReapAndLog(runIDs []string, reason string) {
+	reapAndLog(DockerCLI, runIDs, reason)
+}
+
+// reapAndLog is ReapAndLog with the Runner given, for tests. An engine that
+// does not answer is logged at debug level: it is a normal state of the
+// machine, and a warning at every run end and every daemon start would train
+// the operator to ignore the warning that matters, a labelled object that
+// would not go.
+func reapAndLog(run Runner, runIDs []string, reason string) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer cancel()
-	removed, err := Reap(ctx, DockerCLI, runIDs)
+	removed, err := Reap(ctx, run, runIDs)
 	if !removed.Empty() {
 		slog.Info("removed run docker objects", "reason", reason, "run_ids", runIDs,
 			"containers", removed.Containers, "networks", removed.Networks, "volumes", removed.Volumes)
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrEngineUnreachable):
+		slog.Debug("skipped removing run docker objects: docker engine is not answering", "reason", reason, "run_ids", runIDs, "error", err)
+	case err != nil:
 		slog.Warn("failed to remove run docker objects", "reason", reason, "run_ids", runIDs, "error", err)
 	}
 }

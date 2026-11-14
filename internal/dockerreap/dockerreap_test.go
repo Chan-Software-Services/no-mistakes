@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -22,7 +23,10 @@ type fakeDocker struct {
 	// refuse names objects whose removal fails, the way Docker refuses a
 	// volume another container still mounts.
 	refuse map[string]bool
-	calls  [][]string
+	// engineDown makes every call fail the way the CLI does when no engine
+	// answers it.
+	engineDown bool
+	calls      [][]string
 }
 
 type fakeObject struct {
@@ -52,7 +56,12 @@ func (f *fakeDocker) addContainer(id string, labels map[string]string, anonymous
 
 func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, append([]string(nil), args...))
+	if f.engineDown {
+		return nil, errors.New("failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running")
+	}
 	switch {
+	case slices.Equal(args, []string{"version", "--format", "{{.Server.Version}}"}):
+		return []byte("29.0.0\n"), nil
 	case len(args) >= 2 && args[0] == "ps" && args[1] == "-a":
 		return f.list(f.containers, args[2:])
 	case len(args) >= 2 && args[0] == "volume" && args[1] == "ls":
@@ -277,14 +286,79 @@ func TestReapWithoutDockerIsANoOp(t *testing.T) {
 	}
 }
 
-func TestReapWithDockerNotAnsweringFails(t *testing.T) {
-	run := func(context.Context, ...string) ([]byte, error) {
-		return nil, errors.New("Cannot connect to the Docker daemon")
+// A docker CLI with no engine behind it is a normal state of a machine, and
+// no run can have started a container there: Reap says so with
+// ErrEngineUnreachable after one check, without listing anything.
+func TestReapWithTheEngineNotAnsweringIsReportedAsUnreachable(t *testing.T) {
+	docker := newFakeDocker()
+	docker.engineDown = true
+	removed, err := Reap(context.Background(), docker.run, []string{"RUN1"})
+	if !errors.Is(err, ErrEngineUnreachable) {
+		t.Fatalf("Reap error = %v, want ErrEngineUnreachable", err)
 	}
-	if _, err := Reap(context.Background(), run, []string{"RUN1"}); err == nil {
-		t.Fatal("Reap returned no error when Docker could not list anything")
+	if !removed.Empty() {
+		t.Fatalf("removed = %+v, want nothing", removed)
+	}
+	if len(docker.calls) != 1 {
+		t.Fatalf("Reap made %d calls to an engine that did not answer, want the one check: %q", len(docker.calls), docker.calls)
 	}
 }
+
+// Once the engine answered, a listing that fails is a real failure, not an
+// unreachable engine.
+func TestReapWithAListingFailingAfterTheEngineAnsweredFails(t *testing.T) {
+	docker := newFakeDocker()
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[0] == "ps" {
+			return nil, errors.New("Error response from daemon: invalid filter")
+		}
+		return docker.run(ctx, args...)
+	}
+	_, err := Reap(context.Background(), run, []string{"RUN1"})
+	if err == nil || errors.Is(err, ErrEngineUnreachable) {
+		t.Fatalf("Reap error = %v, want a failure that is not ErrEngineUnreachable", err)
+	}
+}
+
+// The daemon log keeps its warning for what matters: an engine that is not
+// running logs at debug level, a labelled object that would not go warns.
+func TestReapAndLogWarnsOnlyWhenSomethingWouldNotGo(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*fakeDocker)
+		want  slog.Level
+	}{
+		{name: "engine not answering", setup: func(f *fakeDocker) { f.engineDown = true }, want: slog.LevelDebug},
+		{name: "a container would not go", setup: func(f *fakeDocker) {
+			f.addContainer("c1", runLabel("RUN1"))
+			f.refuse["c1"] = true
+		}, want: slog.LevelWarn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			docker := newFakeDocker()
+			tc.setup(docker)
+			var levels []slog.Level
+			handler := &levelRecorder{levels: &levels}
+			previous := slog.Default()
+			slog.SetDefault(slog.New(handler))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			reapAndLog(docker.run, []string{"RUN1"}, "test")
+			if !slices.Equal(levels, []slog.Level{tc.want}) {
+				t.Fatalf("logged levels %v, want one %v", levels, tc.want)
+			}
+		})
+	}
+}
+
+type levelRecorder struct{ levels *[]slog.Level }
+
+func (h *levelRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (h *levelRecorder) Handle(_ context.Context, r slog.Record) error {
+	*h.levels = append(*h.levels, r.Level)
+	return nil
+}
+func (h *levelRecorder) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *levelRecorder) WithGroup(string) slog.Handler      { return h }
 
 func TestReapWithNoRunsCallsNothing(t *testing.T) {
 	docker := newFakeDocker()
