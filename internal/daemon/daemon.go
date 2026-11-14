@@ -20,6 +20,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/dockerreap"
 	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -786,6 +787,17 @@ func cleanupOrphanWorktrees(d *db.DB, p *paths.Paths, leftover []db.RunWorktree)
 		sweepable = append(sweepable, procreap.Worktree{Dir: wt.dir, RepoID: wt.repoID, RunID: wt.runID})
 	}
 	sweepRunWorktrees(p.WorktreesDir(), sweepable, "worktree_cleanup")
+	// A run the previous daemon was executing when it died never reached its
+	// own run-end reap, so its Docker objects are reaped with its worktree.
+	// One pass for every directory, for the startup budget's sake: Reap lists
+	// each kind once whatever the number of runs.
+	if len(removable) > 0 {
+		runIDs := make([]string, 0, len(removable))
+		for _, wt := range removable {
+			runIDs = append(runIDs, wt.runID)
+		}
+		reapRunDocker(runIDs, "worktree_cleanup")
+	}
 
 	for _, wt := range removable {
 		removeOrphanWorktree(ctx, wt)
@@ -978,6 +990,10 @@ type gateMigrationStats struct {
 var ensureGateHooksPathIsolation = git.EnsureHooksPathIsolation
 
 var sweepRunWorktrees = procreap.SweepRunWorktrees
+
+// reapRunDocker removes the Docker objects labelled as the given runs'. It is a
+// variable so tests can observe the calls without a Docker on the machine.
+var reapRunDocker = dockerreap.ReapAndLog
 
 // migrateGateConfigs discovers gates from authoritative DB records plus legacy
 // directories with the strict <id>.git shape. Every unstamped candidate is
