@@ -1018,7 +1018,7 @@ Image and video artifacts (by kind, such as `screenshot` or `video`, or by an im
 The PR body renders each one as its caption only, as plain text such as "Screenshot: the checkout page shows the order total", with no URL, path, file name, or link; one without a caption is left out.
 Other artifacts (logs, command output) are inlined or linked as before.
 `test.evidence.attach_media`, which used to upload images and videos to GitHub user-attachments, is retired: it still parses in global and repo config, logs a deprecation warning, and changes nothing.
-When `store_in_repo` is true for a GitHub repository, the PR step copies that directory, minus its image and video files, onto `branch` under `<dir>/<branch-slug>` in the code branch's push-target repository (the fork when fork routing is configured), pushes it, and links the artifacts from the pull request body.
+When `store_in_repo` is true for a GitHub repository, the PR step copies that directory, minus its image and video files, the Test step's `scratch/` directory, and the review conversation, onto `branch` under `<dir>/<branch-slug>` in the code branch's push-target repository (the fork when fork routing is configured), pushes it, and links the artifacts from the pull request body.
 Image and video files are skipped and do not count against the publication limits, so the evidence branch never carries a screenshot or a recording.
 The branch is an orphan: it shares no history with your code branches, so evidence never reaches the default branch. Links use the evidence commit rather than the branch, so they keep resolving after later runs.
 Branch slashes become nested directories, unsafe branch characters are replaced, and an empty branch slug falls back to the run ID.

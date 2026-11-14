@@ -1,8 +1,10 @@
 package steps
 
 import (
+	"path/filepath"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/evidence"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 )
 
@@ -25,6 +27,16 @@ func testEvidenceDir(sctx *pipeline.StepContext) string {
 		return ""
 	}
 	return sctx.EvidenceDir
+}
+
+// testScratchDir is this run's test scratch directory
+// (evidence.ScratchDirName), or "" when the run has no evidence directory.
+func testScratchDir(sctx *pipeline.StepContext) string {
+	dir := testEvidenceDir(sctx)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, evidence.ScratchDirName)
 }
 
 // evidenceBranchSlug turns a branch name into readable, filesystem-safe path
