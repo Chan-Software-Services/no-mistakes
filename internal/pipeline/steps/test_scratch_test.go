@@ -13,6 +13,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/evidence"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -25,7 +26,7 @@ import (
 
 func TestTestStep_EvidencePromptNamesThisRunsOwnScratchDirectory(t *testing.T) {
 	t.Parallel()
-	prompts := map[string]string{}
+	prompts, tokens := map[string]string{}, map[string]string{}
 	for _, runEvidence := range []string{"run-a", "run-b"} {
 		dir, baseSHA, headSHA := setupGitRepo(t)
 		ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
@@ -41,19 +42,46 @@ func TestTestStep_EvidencePromptNamesThisRunsOwnScratchDirectory(t *testing.T) {
 			t.Fatalf("the run's scratch directory was not created before the turn: %v", err)
 		}
 		prompt := ag.calls[0].Prompt
+		token := testRunToken(sctx)
+		if token == "" || !strings.Contains(strings.ToLower(sctx.Run.ID), token) {
+			t.Fatalf("the run token %q does not come from the run ID %q", token, sctx.Run.ID)
+		}
 		for _, want := range []string{
 			"Write every scratch file this testing needs (driver scripts, throwaway fixtures, configs, data directories, logs) into this run's own scratch directory, never into the worktree or a fixed path such as /tmp/<name> that another run could share: " + scratch,
-			"Give every disposable resource you start (a container, a compose project, a database, a server's port) a name or port unique to this run",
-			"Never name the scratch directory, its files, or those resource names in scenario evidence, artifacts, or the testing summary",
+			"Give every disposable resource you start (a container, a compose project, a database) a name that carries this run's token, " + token + " (for example demo-" + token + "), and start every server on a free port chosen when it starts, never a fixed one",
+			"Never name the scratch directory, its files, this run's token, or those resource names in scenario evidence, artifacts, the \"tested\" array, or the testing summary: a pull request reader cannot see them.",
+			"In \"tested\", record such a check in words, or as its command with the scratch path, the token, and the resource names left out.",
 		} {
 			if !strings.Contains(prompt, want) {
 				t.Errorf("%s: evidence prompt lacks %q\nprompt:\n%s", runEvidence, want, prompt)
 			}
 		}
 		prompts[runEvidence] = scratch
+		tokens[runEvidence] = token
 	}
 	if prompts["run-a"] == prompts["run-b"] {
 		t.Fatalf("two runs share one scratch directory: %s", prompts["run-a"])
+	}
+	if tokens["run-a"] == tokens["run-b"] {
+		t.Fatalf("two runs share one resource token: %s", tokens["run-a"])
+	}
+}
+
+// Run IDs are ULIDs: the leading characters are the start time, so two runs
+// started together share them, and the trailing ones are random (and
+// incremented within one millisecond), so the token is taken from the end.
+func TestTestRunTokenComesFromTheRunIDsRandomTail(t *testing.T) {
+	t.Parallel()
+	for id, want := range map[string]string{
+		"01M7BP002H3MKTQPP4XE8HP1SQ": "xe8hp1sq",
+		"01M7BP002H3MKTQPP4XE8HP1SR": "xe8hp1sr",
+		"run-1":                      "run1",
+		"":                           "",
+	} {
+		sctx := &pipeline.StepContext{Run: &db.Run{ID: id}}
+		if got := testRunToken(sctx); got != want {
+			t.Errorf("testRunToken(%q) = %q, want %q", id, got, want)
+		}
 	}
 }
 

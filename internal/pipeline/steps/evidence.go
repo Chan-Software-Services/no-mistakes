@@ -39,6 +39,29 @@ func testScratchDir(sctx *pipeline.StepContext) string {
 	return filepath.Join(dir, evidence.ScratchDirName)
 }
 
+// testRunToken is the short, lowercase token the Test prompt asks the agent
+// to put in every disposable resource's name, so two runs at once never share
+// a container, compose project, or database by construction rather than by
+// the agent's choice. It is the last eight letters and digits of the run ID:
+// a run ID is a ULID, whose leading characters are the start time that two
+// runs started together share, while its tail is random (incremented within
+// one millisecond, so successive IDs still differ there).
+func testRunToken(sctx *pipeline.StepContext) string {
+	if sctx == nil || sctx.Run == nil {
+		return ""
+	}
+	var token []rune
+	for _, r := range strings.ToLower(sctx.Run.ID) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			token = append(token, r)
+		}
+	}
+	if len(token) > 8 {
+		token = token[len(token)-8:]
+	}
+	return string(token)
+}
+
 // evidenceBranchSlug turns a branch name into readable, filesystem-safe path
 // segments used as the run's directory on the evidence branch. Branch
 // separators are preserved as nested directories; unsafe characters are
