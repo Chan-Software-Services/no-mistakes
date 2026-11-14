@@ -16,13 +16,16 @@ import (
 //
 // A section is one of:
 //
-//   - an ATX or setext heading titled "Disclosure" (any level, any case,
-//     optionally emphasised, with a trailing colon or a parenthetical), up to
-//     the next heading of its level or higher;
-//   - a paragraph or list item that starts with the label "Disclosure:",
-//     "**Disclosure:**", "**Disclosure**" or "Disclosure (...)", up to the end
-//     of that block (a list item ends at its next sibling item); a label with
-//     nothing after it also takes the one block that follows it.
+//   - an ATX or setext heading whose title holds the word "Disclosure"
+//     ("Disclosure", "Disclosure rules", "3. Public disclosure"; any level,
+//     any case, optionally emphasised), up to the next heading of its level
+//     or higher;
+//   - a paragraph, list item or block quote that starts with a label: the
+//     word itself ("Disclosure:", "**Disclosure**", "Disclosure (...)",
+//     "Disclosure - ..."), or a short phrase holding the word before a colon
+//     or a spaced dash ("Disclosure rules:"), up to the end of that block (a
+//     list item ends at its next sibling item, a quote takes all of itself);
+//     a label with nothing after it also takes the one block that follows it.
 //
 // Fenced code is never read as a heading or a label. Every section found is
 // returned, joined by a blank line; rest keeps everything else in order, with
@@ -60,13 +63,20 @@ func SplitDisclosure(text string) (rest, disclosure string) {
 }
 
 var (
-	atxHeadingRe   = regexp.MustCompile(`^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$`)
-	atxClosingRe   = regexp.MustCompile(`[ \t]+#+$`)
-	setextUnderRe  = regexp.MustCompile(`^ {0,3}(=+|-+)[ \t]*$`)
-	fenceRe        = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
-	listItemRe     = regexp.MustCompile(`^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)`)
-	disclosureRe   = regexp.MustCompile(`(?i)^disclosure(?:[ \t]*\([^)]*\))?$`)
-	disclosureLbRe = regexp.MustCompile(`(?i)^(?:\*\*|__)?disclosure(?:\*\*|__)?(?:[ \t]*\([^)]*\))?[ \t]*(?::[ \t]*(?:\*\*|__)?|[ \t]+[-–][ \t]+|$)`)
+	atxHeadingRe     = regexp.MustCompile(`^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$`)
+	atxClosingRe     = regexp.MustCompile(`[ \t]+#+$`)
+	setextUnderRe    = regexp.MustCompile(`^ {0,3}(=+|-+)[ \t]*$`)
+	fenceRe          = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
+	listItemRe       = regexp.MustCompile(`^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)`)
+	disclosureWordRe = regexp.MustCompile(`(?i)\bdisclosure\b`)
+	disclosureLbRe   = regexp.MustCompile(`(?i)^(?:\*\*|__)?disclosure(?:\*\*|__)?(?:[ \t]*\([^)]*\))?[ \t]*(?::[ \t]*(?:\*\*|__)?|[ \t]+[-\x{2013}\x{2014}][ \t]+|$)`)
+	// phraseLbRe is a label of a few words ("Disclosure rules:"), which
+	// counts only when the words hold disclosure (disclosureWordRe) and a
+	// colon or a spaced dash ends them, so prose that merely starts with the
+	// word is never a label.
+	phraseLbRe = regexp.MustCompile(`^(?:\*\*|__)?([^:.!?()*_\x{2013}\x{2014}]{1,60}?)(?:\*\*|__)?(?:[ \t]*\([^)]*\))?(?:[ \t]*:[ \t]*(?:\*\*|__)?|[ \t]+[-\x{2013}\x{2014}][ \t]+)`)
+	quoteRe    = regexp.MustCompile(`^ {0,3}>`)
+	quoteMkRe  = regexp.MustCompile(`^(?:[ \t]*>[ \t]?)+`)
 )
 
 // disclosureEnd returns the end (exclusive) of the Disclosure section that
@@ -76,7 +86,7 @@ func disclosureEnd(lines []string, fenced []fence, i int) int {
 		return i
 	}
 	if level, title, ok := headingAt(lines, fenced, i); ok {
-		if !disclosureRe.MatchString(headingTitle(title)) {
+		if !disclosureWordRe.MatchString(headingTitle(title)) {
 			return i
 		}
 		j := i + 1
@@ -97,9 +107,13 @@ func disclosureEnd(lines []string, fenced []fence, i int) int {
 // starting at line i, or i when line i carries no label.
 func labelEnd(lines []string, fenced []fence, i int) int {
 	line := lines[i]
+	quoted := quoteRe.MatchString(line)
+	if quoted {
+		line = line[len(quoteMkRe.FindString(line)):]
+	}
 	item := listItemRe.FindString(line)
 	content := strings.TrimSpace(line[len(item):])
-	match := disclosureLbRe.FindString(content)
+	match := disclosureLabel(content)
 	if match == "" {
 		return i
 	}
@@ -107,6 +121,26 @@ func labelEnd(lines []string, fenced []fence, i int) int {
 	needBlock := strings.TrimSpace(content[len(match):]) == ""
 	sawBlank, sawContent := false, false
 	j := i + 1
+	if quoted {
+		// A block-quoted label takes the whole quote, lazy continuation
+		// lines included, and an empty one also the block after it.
+		for ; j < len(lines) && !isBlank(lines[j]); j++ {
+			if quoteRe.MatchString(lines[j]) {
+				if !isBlank(lines[j][len(quoteMkRe.FindString(lines[j])):]) {
+					sawContent = true
+				}
+				continue
+			}
+			if _, _, ok := headingAt(lines, fenced, j); ok || fenced[j] != fenceNone {
+				break
+			}
+			sawContent = true
+		}
+		if !needBlock || sawContent || j >= len(lines) || !isBlank(lines[j]) {
+			return j
+		}
+		indent, item = 0, ""
+	}
 	for ; j < len(lines); j++ {
 		if fenced[j] == fenceBody {
 			continue // inside a fence this block already took
@@ -131,6 +165,20 @@ func labelEnd(lines []string, fenced []fence, i int) int {
 		sawBlank, sawContent = false, true
 	}
 	return j
+}
+
+// disclosureLabel returns the Disclosure label that starts content, or "":
+// the word itself ("Disclosure:", "**Disclosure**", "Disclosure (...)"),
+// alone or before a colon or a spaced dash, or a short phrase holding the
+// word before one ("Disclosure rules:").
+func disclosureLabel(content string) string {
+	if match := disclosureLbRe.FindString(content); match != "" {
+		return match
+	}
+	if m := phraseLbRe.FindStringSubmatch(content); m != nil && disclosureWordRe.MatchString(m[1]) {
+		return m[0]
+	}
+	return ""
 }
 
 // headingAt reports whether line i opens an ATX heading or is the text line

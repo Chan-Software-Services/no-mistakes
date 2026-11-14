@@ -19,7 +19,7 @@ metadata:
 
 **An Intent's Disclosure Section Is Never Published**
 
-- `intent.SplitDisclosure` is the one recognizer of an intent's Disclosure section (a heading titled `Disclosure`, or a paragraph or list item labelled `Disclosure:`), and `publicPRIntent` publishes only `publishableUserIntent`, the intent without it, on every Intent-section path (ordinary, fallback, template appendix). The split runs on the raw intent, before `sanitizePromptMultilineText` collapses the indentation that bounds a list item. Recognition errs toward removal.
+- `intent.SplitDisclosure` is the one recognizer of an intent's Disclosure section (a heading whose title holds the word, or a paragraph, list item or block quote whose label holds it: `Disclosure:`, `Disclosure rules:`, `Disclosure - ...`), and `publicPRIntent` publishes only `publishableUserIntent`, the intent without it, on every Intent-section path (ordinary, fallback, template appendix). The split runs on the raw intent, before `sanitizePromptMultilineText` collapses the indentation that bounds a list item. Recognition errs toward removal.
 - Step prompts keep the whole intent, Disclosure included, because the section governs what each step writes; `userIntentPromptSection` adds `disclosurePromptClause` only when one is present, so a prompt without one is byte-for-byte unchanged. That clause is prompt guidance, not an output filter: no scanner looks for barred words in drafted text.
 - Regressions: `internal/intent/disclosure_test.go`, `TestPRBodyNeverPublishesTheIntentsDisclosureSection`, `TestUserIntentPromptSectionBindsPublishedTextToTheDisclosure` (`pr_disclosure_test.go`).
 

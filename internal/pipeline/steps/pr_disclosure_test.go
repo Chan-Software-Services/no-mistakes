@@ -41,6 +41,16 @@ var disclosureIntents = []struct {
 		published:  []string{"Sign-in secrets are stored hashed.", "A follow-up removes the old fields after one release."},
 		disclosure: []string{"Disclosure", "attack", "bypass", "cite a report"},
 	},
+	{
+		name: "heading with more words",
+		intent: "Reset links now expire after one use.\n\n" +
+			"## Disclosure rules\n\n" +
+			"Say the links are single-use, never \"replay\" or \"takeover\".\n\n" +
+			"## Notes\n\n" +
+			"Old links stop working at deploy.",
+		published:  []string{"Reset links now expire after one use.", "Old links stop working at deploy."},
+		disclosure: []string{"Disclosure", "single-use", "replay", "takeover"},
+	},
 }
 
 func TestPRBodyNeverPublishesTheIntentsDisclosureSection(t *testing.T) {
