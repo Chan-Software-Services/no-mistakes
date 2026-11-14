@@ -52,7 +52,7 @@ const housekeepingLintSection = `
 
 Combined lint duty (same pass - no separate lint agent will run):
 - Discover the configured linters and formatters for this repository.
-` + lintScopeRule + `
+` + housekeepingLintScopeRule + `
 - Apply safe formatter, linter, and static-analysis fixes yourself, then re-run the relevant checks.
 - Do not run tests or broader behavioral validation.
 - Report only unresolved lint, format, or static-analysis issues as findings with "category" set to "lint". Do not report lint issues you already fixed.
