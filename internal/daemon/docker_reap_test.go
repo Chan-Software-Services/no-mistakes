@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
@@ -83,6 +84,88 @@ func TestRunEndReapsTheRunsDockerObjects(t *testing.T) {
 				t.Fatalf("reaps naming the run = %q, want one at run_finished", got)
 			}
 		})
+	}
+}
+
+// A run cancelled mid-step reaches the same run end, so its Docker objects go
+// too.
+func TestCancelledRunReapsTheRunsDockerObjects(t *testing.T) {
+	started := make(chan struct{})
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+		return []pipeline.Step{&mockSlowStep{name: types.StepReview, started: started}}
+	})
+	runID := pushTestRun(t, p, d, "docker-reap-cancelled")
+	select {
+	case <-started:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the run's step never started")
+	}
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Call(ipc.MethodCancelRun, &ipc.CancelRunParams{RunID: runID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// waitForRunTerminalState waits for completed or failed only.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		run, err := d.GetRun(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Status.Terminal() {
+			if run.Status != types.RunCancelled {
+				t.Fatalf("run status = %q, want %q", run.Status, types.RunCancelled)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cancelled run is still %q", run.Status)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	shutdownTestDaemonAndWaitForCleanup(t, p)
+	if got := dockerReaps.reasonsFor(runID); !slices.Equal(got, []string{"run_finished"}) {
+		t.Fatalf("reaps naming the run = %q, want one at run_finished", got)
+	}
+}
+
+// A run whose setup fails after its worktree exists never starts a step, but
+// the worktree's removal is a run end all the same, and it reaps the run's
+// label through the same helper.
+func TestRunSetupFailureReapsTheRunsDockerObjects(t *testing.T) {
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+		return []pipeline.Step{&mockPassStep{name: types.StepReview}}
+	})
+	repo, _ := setupTestGitRepo(t, p, d, "docker-reap-setup-failure")
+	// Setup fails after the worktree exists: the pushed tree's repo config
+	// does not parse.
+	headSHA := commitInvalidRepoConfig(t, repo.WorkingPath)
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var result ipc.PushReceivedResult
+	if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate: p.RepoDir(repo.ID),
+		Ref:  "refs/heads/main",
+		Old:  "0000000000000000000000000000000000000000",
+		New:  headSHA,
+	}, &result); err == nil {
+		t.Fatal("push with an unparseable repo config created a run")
+	}
+	runs, err := d.GetRunsByRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("the failed push left %d runs, want 1", len(runs))
+	}
+	if got := dockerReaps.reasonsFor(runs[0].ID); !slices.Equal(got, []string{"run_setup_failed"}) {
+		t.Fatalf("reaps naming the run = %q, want one at run_setup_failed", got)
 	}
 }
 

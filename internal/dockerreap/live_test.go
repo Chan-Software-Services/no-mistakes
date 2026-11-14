@@ -44,8 +44,12 @@ func TestReapLiveMongoLeavesNoVolume(t *testing.T) {
 	if len(anonymous) != 2 {
 		t.Fatalf("mongo:7 mounted %v, want its two anonymous volumes", anonymous)
 	}
+	// Each object gets its own cleanup as it is created, so a Reap that fails
+	// or regresses still leaves nothing on the machine's Docker.
 	named := docker("volume", "create", "--label", Label(runID))
+	t.Cleanup(func() { _, _ = DockerCLI(context.Background(), "volume", "rm", named) })
 	network := docker("network", "create", "--label", Label(runID), runID)
+	t.Cleanup(func() { _, _ = DockerCLI(context.Background(), "network", "rm", network) })
 	kept := docker("volume", "create", "--label", Label(other))
 	t.Cleanup(func() { _, _ = DockerCLI(context.Background(), "volume", "rm", kept) })
 

@@ -75,6 +75,7 @@ printf '%s\n' "$id" > ` + filepath.Join(out, "container") + `
 	if len(containers) != 1 || len(volumes) != 2 {
 		t.Fatalf("the test command started %v with volumes %v, want one container and its two anonymous volumes", containers, volumes)
 	}
+	t.Logf("run %s's test command started container %s with anonymous volumes %v", run.ID, containers[0], volumes)
 	// The run's status turns terminal before its cleanup runs, so wait for the
 	// container, bounded by the reap's own timeout and some margin.
 	deadline := time.Now().Add(dockerreap.DefaultTimeout + 20*time.Second)
@@ -89,4 +90,5 @@ printf '%s\n' "$id" > ` + filepath.Join(out, "container") + `
 			t.Errorf("run %s ended and its container's anonymous volume %s is still there", run.ID, volume)
 		}
 	}
+	t.Logf("after run %s ended: container %s and volumes %v are gone", run.ID, containers[0], volumes)
 }
