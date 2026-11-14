@@ -34,7 +34,7 @@ func (s *LintStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		// lint responsibility is never silently skipped.
 		if !sctx.Fixing {
 			if stash, ok := sctx.Shared.TakeHousekeepingLint(); ok {
-				return lintOutcomeFromHousekeeping(sctx, stash)
+				return lintOutcomeFromHousekeeping(sctx, baseSHA, stash)
 			}
 		}
 		sctx.Log("no lint command configured, asking agent to lint and fix...")
@@ -49,7 +49,8 @@ Context:
 
 Task:
 - Discover the configured linters and formatters for this repository.
-- Only lint or format the relevant changed files when possible.
+%s
+%s
 - Apply safe formatter, linter, and static-analysis fixes yourself.
 - Re-run the relevant checks after fixing.
 - Report only unresolved lint, format, or static-analysis issues as structured findings.
@@ -64,6 +65,8 @@ Rules:
 			sctx.Run.Branch,
 			baseSHA,
 			sctx.Run.HeadSHA,
+			projectToolRule,
+			lintScopeRule,
 			reassessHistory,
 		)
 		if sctx.PreviousFindings != "" {
@@ -104,6 +107,10 @@ Previous lint findings to address:
 			sctx.Log(fmt.Sprintf("warning: could not parse lint summary: %v", err))
 		}
 		committed, err := commitAgentFixesWithResult(sctx, s.Name(), summary, "fix lint issues")
+		if err != nil {
+			return nil, err
+		}
+		findings, _, err = scopeLintOutcomeFindings(sctx, baseSHA, findings)
 		if err != nil {
 			return nil, err
 		}
@@ -198,18 +205,29 @@ Previous lint findings to address:
 
 // lintOutcomeFromHousekeeping reports the lint findings the combined
 // document+lint pass produced, with the same gate semantics as the lint
-// step's own agent path: blocking (error/warning) findings park for a
-// decision, info findings pass through.
-func lintOutcomeFromHousekeeping(sctx *pipeline.StepContext, stash pipeline.HousekeepingLintResult) (*pipeline.StepOutcome, error) {
+// step's own agent path: findings on files outside the change are demoted to
+// information, blocking (error/warning) findings park for a decision, info
+// findings pass through.
+func lintOutcomeFromHousekeeping(sctx *pipeline.StepContext, baseSHA string, stash pipeline.HousekeepingLintResult) (*pipeline.StepOutcome, error) {
 	findings, err := types.ParseFindingsJSON(stash.FindingsJSON)
 	if err != nil {
 		return nil, fmt.Errorf("validate combined housekeeping lint result: %w", err)
 	}
 	sctx.Log(fmt.Sprintf("lint assessed in the combined document+lint housekeeping pass: %d unresolved items", len(findings.Items)))
+	findingsJSON := stash.FindingsJSON
+	findings, demoted, err := scopeLintOutcomeFindings(sctx, baseSHA, findings)
+	if err != nil {
+		return nil, err
+	}
+	if demoted > 0 {
+		if findingsJSON, err = types.MarshalFindingsJSON(findings); err != nil {
+			return nil, fmt.Errorf("encode scoped housekeeping lint result: %w", err)
+		}
+	}
 	return &pipeline.StepOutcome{
 		NeedsApproval: hasBlockingFindings(findings.Items),
 		AutoFixable:   false,
-		Findings:      stash.FindingsJSON,
+		Findings:      findingsJSON,
 		FixSummary:    stash.Summary,
 	}, nil
 }

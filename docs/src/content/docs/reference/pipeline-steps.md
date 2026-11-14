@@ -199,6 +199,7 @@ Updates matching documentation for code changes and reports only unresolved gaps
   An unreadable structured output lists nothing, so every such date is restored; each restoration is logged with the file and both values, and a file without the key is untouched.
 - Keeps the em dash out of what it writes, in the same passes: in each `.md` or `.mdx` file it changed, every em dash (U+2014) on a line the agent added or changed relative to the step's starting head is rewritten to `-` before the commit (a spaced em dash becomes a spaced `-`), and each rewritten file is logged with its count.
   Lines the agent did not write are never touched, so existing text, including a quoted rule, keeps its em dash; neither is an em dash in a fenced code block or an inline code span, where the character is the content; other file types are never rewritten, and there is no configuration.
+- Tells the agent, in the document pass and the combined housekeeping pass, to run any formatter or linter only the way the project's own scripts and CI run it (that command's working directory and configuration, which may sit in a subdirectory such as `front-end/.prettierrc.json`), never with the tool's default settings; this is an instruction to the agent, not a check the step runs
 - When `commands.lint` is empty, performs documentation and agent-driven lint in one combined housekeeping invocation, categorizing findings for the document or lint gate; if that pass is skipped, its structured output is unusable, or a daemon restart loses the in-memory result, lint runs its own agent pass instead
 - Includes user intent when available
 - Returns findings only for unresolved documentation gaps or human judgment calls
@@ -217,12 +218,14 @@ Runs linters and static analysis.
 
 - If `commands.lint` is set: ensures [`commands.prepare`](/no-mistakes/reference/repo-config/#commandsprepare) has succeeded once for the isolated worktree, then runs lint via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows). Non-zero exit produces `warning` findings.
 - If `commands.lint` is empty: consumes lint-category findings from the document step's combined housekeeping pass, avoiding a second cold agent invocation. If no usable combined result exists, the lint step detects appropriate linters/formatters, applies safe fixes, reruns the relevant checks, commits any agent changes, and returns structured findings only for unresolved issues.
+- In both agent passes the agent is told to run each formatter and linter the way the project's own scripts and CI run it, as the [Document](#document) step's agent is, and to check, fix, and report only the files the change touches.
+- Whatever the agent reports, an `error` or `warning` lint finding on a file outside the change (the files changed between the branch base and the current head) is kept as an `info` finding with `action: no-op`, so a problem the change did not introduce never parks the run. A finding with no file, or on a directory holding a changed file, keeps its severity.
 - Bounds those agent turns, including a configured-lint repair turn, with [`agent_timeout`](/no-mistakes/reference/global-config/#agent_timeout): an expired budget cancels the agent and fails the step with a timeout diagnostic rather than leaving the run active indefinitely
 
 **Approval:** lint findings with `action: ask-user` pause for approval.
 `action: auto-fix` findings stay eligible for the fix loop when `commands.lint` is configured.
 `action: no-op` findings are informational only.
-Combined-pass lint findings use the same gate: `error` and `warning` findings pause for a decision, while `info` findings do not.
+Combined-pass lint findings use the same gate, after the same demotion of findings outside the change: `error` and `warning` findings pause for a decision, while `info` findings do not.
 
 **Auto-fix:** when `commands.lint` is configured, the lint step follows the same pattern as test - the agent fixes `action: auto-fix` issues using the previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and the shared [finding decision history](#finding-decision-history), including earlier fix summaries for this step, then lint re-runs.
 When `commands.lint` is empty, unresolved findings from the combined pass pause for approval instead of starting another automatic lint/fix loop, because the agent already attempted safe fixes during housekeeping.

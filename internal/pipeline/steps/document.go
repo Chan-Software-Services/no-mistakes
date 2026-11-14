@@ -52,7 +52,7 @@ const housekeepingLintSection = `
 
 Combined lint duty (same pass - no separate lint agent will run):
 - Discover the configured linters and formatters for this repository.
-- Run the relevant checks, preferring only the changed files when possible.
+` + lintScopeRule + `
 - Apply safe formatter, linter, and static-analysis fixes yourself, then re-run the relevant checks.
 - Do not run tests or broader behavioral validation.
 - Report only unresolved lint, format, or static-analysis issues as findings with "category" set to "lint". Do not report lint issues you already fixed.
@@ -290,6 +290,7 @@ Task:
 
 Rules:
 %s
+%s
 - Move a doc's `+"`verified`"+` frontmatter date only when you read that doc in full against the code it describes in this pass, and list each such doc's path in "read_against_code"; never lower a date, and never set one later than today. Before the commit, the pipeline restores a date moved on a doc you did not list, a lowered date, and a date later than today.
 - Never write the em dash ("—"); use "-". Before the commit, the pipeline rewrites any em dash outside code on a Markdown line you added or changed to "-".
 - The summary must be one concise sentence fragment suitable for a git commit subject.
@@ -305,6 +306,7 @@ Rules:
 		trustedDocumentPolicySection(sctx),
 		lintDutySection(combinedLint),
 		editRule,
+		projectToolRule,
 		historySection,
 	)
 	if sctx.PreviousFindings != "" {
