@@ -138,3 +138,62 @@ func TestUserIntentPromptSectionBindsPublishedTextToTheDisclosure(t *testing.T) 
 		t.Fatal("an intent with no Disclosure section got the Disclosure clause")
 	}
 }
+
+// The caller-side omission withholds the intent from the PR-drafting turns,
+// but those turns write the PR title and body, the most public text a run
+// produces, from a diff and commit messages that may hold the very words a
+// Disclosure section bars. They still get the Disclosure section, alone, with
+// the clause that binds what they write to it; the rest stays withheld and the
+// body still has no Intent section.
+func TestPRDraftingUnderOmissionStillFollowsTheDisclosure(t *testing.T) {
+	t.Parallel()
+	const withheld = "Organizer sign-ins are kept on the server so they can be ended."
+	const rule = "describe the change as hardening only, and never say \"stolen\""
+	intentText := withheld + "\n\n## Disclosure\n\n" + rule + ".\n\n## Notes\n\nThe vendor cookie stays."
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) (*pipeline.StepContext, *mockAgent)
+	}{
+		{name: "ordinary narrative", setup: func(t *testing.T) (*pipeline.StepContext, *mockAgent) {
+			dir, base, head := setupGitRepo(t)
+			ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+				return &agent.Result{Output: json.RawMessage(`{"title":"feat: sign-ins","body":"## What Changed\n\n- Sign-ins are kept on the server."}`)}, nil
+			}}
+			return newTestContextWithDBRecords(t, ag, dir, base, head, config.Commands{}), ag
+		}},
+		{name: "repository template narrative", setup: func(t *testing.T) (*pipeline.StepContext, *mockAgent) {
+			sctx, ag, _ := templateTestContext(t)
+			return sctx, ag
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sctx, ag := tc.setup(t)
+			sctx.UserIntent = intentText
+			sctx.IntentSource = "agent"
+			sctx.Run.OmitIntent = true
+			got, err := (&PRStep{}).buildPRContent(sctx, "feature", "main", sctx.Run.BaseSHA, scm.ProviderGitHub, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ag.calls) == 0 {
+				t.Fatal("no drafting turn ran")
+			}
+			for i, call := range ag.calls {
+				if !strings.Contains(call.Prompt, rule) {
+					t.Errorf("drafting turn %d lost the Disclosure rules:\n%s", i, call.Prompt)
+				}
+				if !strings.Contains(call.Prompt, omittedIntentDisclosureClause) {
+					t.Errorf("drafting turn %d lost the clause binding its text to the Disclosure:\n%s", i, call.Prompt)
+				}
+				for _, rest := range []string{withheld, "The vendor cookie stays.", "USER INTENT"} {
+					if strings.Contains(call.Prompt, rest) {
+						t.Errorf("drafting turn %d received withheld intent text %q:\n%s", i, rest, call.Prompt)
+					}
+				}
+			}
+			if strings.Contains(got.Body, "## Intent") || strings.Contains(got.Body, "stolen") || strings.Contains(got.Body, withheld) {
+				t.Fatalf("PR body published withheld intent:\n%s", got.Body)
+			}
+		})
+	}
+}
