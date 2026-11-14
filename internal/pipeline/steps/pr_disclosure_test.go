@@ -228,3 +228,54 @@ func TestPRDraftingUnderOmissionNeverGetsAVulnerabilityHeadingAsTheRules(t *test
 		}
 	}
 }
+
+// DisclosureRules hands over only the named rules shapes, so a rules section
+// under another heading ("Coordinated disclosure") is withheld with the rest
+// of the intent. The drafting turns must still learn that the withheld intent
+// bars some public wording, or they draft from commits that may hold it.
+func TestPRDraftingUnderOmissionKeepsToPlainFactsWhenTheRulesAreWithheld(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) (*pipeline.StepContext, *mockAgent)
+	}{
+		{name: "ordinary narrative", setup: func(t *testing.T) (*pipeline.StepContext, *mockAgent) {
+			dir, base, head := setupGitRepo(t)
+			ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+				return &agent.Result{Output: json.RawMessage(`{"title":"fix: session store","body":"## What Changed\n\n- The session store is hardened."}`)}, nil
+			}}
+			return newTestContextWithDBRecords(t, ag, dir, base, head, config.Commands{}), ag
+		}},
+		{name: "repository template narrative", setup: func(t *testing.T) (*pipeline.StepContext, *mockAgent) {
+			sctx, ag, _ := templateTestContext(t)
+			return sctx, ag
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sctx, ag := tc.setup(t)
+			sctx.UserIntent = "Harden the session store.\n\n## Coordinated disclosure\n\nNever name the CVE."
+			sctx.IntentSource = "agent"
+			sctx.Run.OmitIntent = true
+			got, err := (&PRStep{}).buildPRContent(sctx, "feature", "main", sctx.Run.BaseSHA, scm.ProviderGitHub, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ag.calls) == 0 {
+				t.Fatal("no drafting turn ran")
+			}
+			for i, call := range ag.calls {
+				if !strings.Contains(call.Prompt, withheldDisclosureClause) {
+					t.Errorf("drafting turn %d was not told the withheld intent bars some wording:\n%s", i, call.Prompt)
+				}
+				for _, withheld := range []string{"Harden the session store.", "Never name the CVE.", "USER INTENT"} {
+					if strings.Contains(call.Prompt, withheld) {
+						t.Errorf("drafting turn %d received withheld intent text %q:\n%s", i, withheld, call.Prompt)
+					}
+				}
+			}
+			if strings.Contains(got.Body, "## Intent") || strings.Contains(got.Body, "CVE") {
+				t.Fatalf("PR body published withheld intent:\n%s", got.Body)
+			}
+		})
+	}
+}

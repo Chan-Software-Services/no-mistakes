@@ -36,6 +36,15 @@ import (
 // DisclosureRules reads the same sections the other way, for the one outlet
 // where too much is the leak.
 //
+// Documented limit: what reads as rules is a closed list (rulesTitleRe:
+// "Disclosure", "Disclosure rules", "Disclosure policy", "Public
+// disclosure"). A rules section under any other heading or label, such as
+// "Coordinated disclosure", is still removed from the PR body, but under the
+// caller-side omission it is withheld from the PR-drafting turns with the rest
+// of the intent; those turns then get only a clause that the withheld intent
+// bars some public wording (withheldDisclosureClause in
+// internal/pipeline/steps), not the rules themselves.
+//
 // Recognition errs toward removal: a label that starts a line inside a
 // paragraph still starts a section, because a line kept out of the PR body by
 // mistake costs nothing while a published rule cannot be taken back.
