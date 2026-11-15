@@ -132,7 +132,7 @@ func TestRunCleanupLeavesNoEmptyEvidenceDirectory(t *testing.T) {
 		if time.Now().After(deadline) {
 			entries, readErr := os.ReadDir(runDir)
 			h.dumpDebugState()
-			t.Fatalf("empty evidence directory %s survived the run (entries=%v, readErr=%v; %s)", runDir, entries, readErr, runProgress(h.RunInfo(run.ID)))
+			t.Fatalf("empty evidence directory %s survived the run (entries=%v, readErr=%v; %s)", runDir, entries, readErr, h.runProgressByID(run.ID))
 		}
 		time.Sleep(250 * time.Millisecond)
 	}

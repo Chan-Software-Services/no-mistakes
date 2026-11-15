@@ -192,7 +192,7 @@ func TestEvalAutoCaptureJourney(t *testing.T) {
 	}
 	if !collected.MatchString(out) {
 		h.dumpDebugState()
-		t.Fatalf("no eval case was collected without an explicit capture; sets output = %q (%s)", out, runProgress(h.RunInfo(gated.ID)))
+		t.Fatalf("no eval case was collected without an explicit capture; sets output = %q (%s)", out, h.runProgressByID(gated.ID))
 	}
 	t.Logf("eval sets output after an ordinary run:\n%s", out)
 }
