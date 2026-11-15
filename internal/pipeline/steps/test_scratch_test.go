@@ -49,8 +49,8 @@ func TestTestStep_EvidencePromptNamesThisRunsOwnScratchDirectory(t *testing.T) {
 		for _, want := range []string{
 			"Write every scratch file this testing needs (driver scripts, throwaway fixtures, configs, data directories, logs) into this run's own scratch directory, never into the worktree or a fixed path such as /tmp/<name> that another run could share: " + scratch,
 			"Give every disposable resource you start (a container, a compose project, a database) a name that carries this run's token, " + token + " (for example demo-" + token + "), and start every server on a free port chosen when it starts, never a fixed one",
-			"Never name the scratch directory, its files, this run's token, or those resource names in scenario evidence, artifacts, the \"tested\" array, or the testing summary: a pull request reader cannot see them.",
-			"In \"tested\", record such a check in words, or as its command with the scratch path, the token, and the resource names left out.",
+			"Never name the scratch directory, its files, this run's token, this run's ID or its Docker label, or those resource names in scenario evidence, artifacts, the \"tested\" array, or the testing summary: a pull request reader cannot see them.",
+			"In \"tested\", record such a check in words, or as its command with the scratch path, the token, the run ID and its Docker label, and the resource names left out.",
 		} {
 			if !strings.Contains(prompt, want) {
 				t.Errorf("%s: evidence prompt lacks %q\nprompt:\n%s", runEvidence, want, prompt)
