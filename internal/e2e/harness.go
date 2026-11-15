@@ -637,10 +637,35 @@ func (h *Harness) waitForRunStatus(branch string, timeout time.Duration, match f
 	}
 	h.dumpDebugState()
 	if lastRun != nil {
-		h.t.Fatalf("run for branch %s did not %s in %v (last status=%s)", branch, action, timeout, lastRun.Status)
+		h.t.Fatalf("run for branch %s did not %s in %v (%s)", branch, action, timeout, runProgress(lastRun))
 	}
 	h.t.Fatalf("no run found for branch %s within %v", branch, timeout)
 	return nil
+}
+
+// runProgress says where a run stopped, for a wait that timed out: the run's
+// status and the first step, in pipeline order, that has not finished.
+func runProgress(run *ipc.RunInfo) string {
+	if run == nil {
+		return "no run seen"
+	}
+	if len(run.Steps) == 0 {
+		return fmt.Sprintf("run status=%s, no steps recorded", run.Status)
+	}
+	var stopped *ipc.StepResultInfo
+	for i := range run.Steps {
+		step := &run.Steps[i]
+		if step.Status == types.StepStatusCompleted || step.Status == types.StepStatusSkipped {
+			continue
+		}
+		if stopped == nil || step.StepOrder < stopped.StepOrder {
+			stopped = step
+		}
+	}
+	if stopped == nil {
+		return fmt.Sprintf("run status=%s, every step finished", run.Status)
+	}
+	return fmt.Sprintf("run status=%s, stopped at step %s status=%s", run.Status, stopped.StepName, stopped.Status)
 }
 
 // dumpDebugState writes the daemon log, agent log, and per-step run

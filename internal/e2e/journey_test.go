@@ -1984,7 +1984,7 @@ func waitForRunIDStatus(t *testing.T, h *Harness, runID string, status types.Run
 	}
 	h.dumpDebugState()
 	if lastRun != nil {
-		t.Fatalf("run %s did not reach %s in %v (last status=%s)", runID, status, timeout, lastRun.Status)
+		t.Fatalf("run %s did not reach %s in %v (%s)", runID, status, timeout, runProgress(lastRun))
 	}
 	t.Fatalf("run %s did not appear while waiting for %s in %v", runID, status, timeout)
 	return nil
@@ -2013,9 +2013,9 @@ func waitForStepStatus(t *testing.T, h *Harness, branch string, stepName types.S
 	h.dumpDebugState()
 	if lastRun != nil {
 		if step, ok := findStep(lastRun.Steps, stepName); ok {
-			t.Fatalf("step %s for branch %s did not reach %s in %v (last status=%s)", stepName, branch, status, timeout, step.Status)
+			t.Fatalf("step %s for branch %s did not reach %s in %v (last status=%s; %s)", stepName, branch, status, timeout, step.Status, runProgress(lastRun))
 		}
-		t.Fatalf("step %s for branch %s did not appear in %v (run status=%s)", stepName, branch, timeout, lastRun.Status)
+		t.Fatalf("step %s for branch %s did not appear in %v (%s)", stepName, branch, timeout, runProgress(lastRun))
 	}
 	t.Fatalf("run for branch %s did not appear while waiting for %s in %v", branch, stepName, timeout)
 	return nil

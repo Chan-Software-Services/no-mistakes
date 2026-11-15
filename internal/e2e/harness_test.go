@@ -167,3 +167,55 @@ func TestWaitForRunPrefersNewestRunOnBranch(t *testing.T) {
 		t.Fatalf("GetRuns calls = %d, want at least 2 polls", calls.Load())
 	}
 }
+
+// A wait that times out must say where the run stopped, so a hang is read
+// from the failure line and not dug out of the dumped logs.
+func TestRunProgressNamesTheStepTheRunStoppedAt(t *testing.T) {
+	step := func(order int, name types.StepName, status types.StepStatus) ipc.StepResultInfo {
+		return ipc.StepResultInfo{StepName: name, StepOrder: order, Status: status}
+	}
+	for _, tc := range []struct {
+		name string
+		run  *ipc.RunInfo
+		want string
+	}{
+		{
+			name: "a running step after finished ones, whatever the slice order",
+			run: &ipc.RunInfo{Status: types.RunRunning, Steps: []ipc.StepResultInfo{
+				step(3, types.StepDocument, types.StepStatusPending),
+				step(2, types.StepTest, types.StepStatusRunning),
+				step(0, types.StepRebase, types.StepStatusSkipped),
+				step(1, types.StepReview, types.StepStatusCompleted),
+			}},
+			want: "run status=running, stopped at step test status=running",
+		},
+		{
+			name: "a parked step",
+			run: &ipc.RunInfo{Status: types.RunRunning, Steps: []ipc.StepResultInfo{
+				step(0, types.StepReview, types.StepStatusAwaitingApproval),
+				step(1, types.StepTest, types.StepStatusPending),
+			}},
+			want: "run status=running, stopped at step review status=awaiting_approval",
+		},
+		{
+			name: "every step finished",
+			run: &ipc.RunInfo{Status: types.RunCompleted, Steps: []ipc.StepResultInfo{
+				step(0, types.StepReview, types.StepStatusCompleted),
+				step(1, types.StepTest, types.StepStatusSkipped),
+			}},
+			want: "run status=completed, every step finished",
+		},
+		{
+			name: "no steps recorded yet",
+			run:  &ipc.RunInfo{Status: types.RunPending},
+			want: "run status=pending, no steps recorded",
+		},
+		{name: "no run", run: nil, want: "no run seen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runProgress(tc.run); got != tc.want {
+				t.Fatalf("runProgress = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
