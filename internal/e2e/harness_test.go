@@ -425,3 +425,14 @@ func TestDaemonsOutlivingTestIsEmptyWhenNoDaemonWasLaunched(t *testing.T) {
 		t.Fatalf("daemonsOutlivingTest = %v, want none", got)
 	}
 }
+
+// A wait that times out because the daemon is gone must still fail with its
+// own message, so the run's progress degrades to the lookup error.
+func TestRunProgressByIDReportsAnUnreachableDaemon(t *testing.T) {
+	h := &Harness{t: t, NMHome: t.TempDir()}
+
+	got := h.runProgressByID("run-1")
+	if !strings.HasPrefix(got, "run not readable: dial daemon: ") {
+		t.Fatalf("runProgressByID() = %q, want the dial error in place of the run's progress", got)
+	}
+}

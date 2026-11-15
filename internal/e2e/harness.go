@@ -522,17 +522,25 @@ func (h *Harness) Runs() []ipc.RunInfo {
 
 func (h *Harness) RunInfo(runID string) *ipc.RunInfo {
 	h.t.Helper()
+	run, err := h.runInfo(runID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return run
+}
+
+func (h *Harness) runInfo(runID string) (*ipc.RunInfo, error) {
 	p := paths.WithRoot(h.NMHome)
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
-		h.t.Fatalf("dial daemon: %v", err)
+		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
 	defer client.Close()
 	var result ipc.GetRunResult
 	if err := client.Call(ipc.MethodGetRun, &ipc.GetRunParams{RunID: runID}, &result); err != nil {
-		h.t.Fatalf("get run %s: %v", runID, err)
+		return nil, fmt.Errorf("get run %s: %w", runID, err)
 	}
-	return result.Run
+	return result.Run, nil
 }
 
 func (h *Harness) ActiveRun(branch string) *ipc.RunInfo {
@@ -680,6 +688,17 @@ func runProgress(run *ipc.RunInfo) string {
 		return status + ", every step finished"
 	}
 	return fmt.Sprintf("%s, stopped at step %s status=%s", status, stopped.StepName, stopped.Status)
+}
+
+// runProgressByID is runProgress for a wait that may time out with the daemon
+// unreachable: a failed lookup is reported in place of the run's progress
+// rather than failing the test, which would replace the wait's own message.
+func (h *Harness) runProgressByID(runID string) string {
+	run, err := h.runInfo(runID)
+	if err != nil {
+		return fmt.Sprintf("run not readable: %v", err)
+	}
+	return runProgress(run)
 }
 
 // dumpDebugState writes the daemon log, agent log, and per-step run
