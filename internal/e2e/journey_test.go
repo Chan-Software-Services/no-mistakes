@@ -1963,12 +1963,17 @@ func assertReviewWarningRun(t *testing.T, h *Harness) {
 	}
 }
 
+// waitForRunIDStatus polls until the named run reaches status. A failed poll
+// is polled again until the timeout, so an unreachable daemon ends the wait
+// with its own message, which carries the last poll's error.
 func waitForRunIDStatus(t *testing.T, h *Harness, runID string, status types.RunStatus, timeout time.Duration) *ipc.RunInfo {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	var lastRun *ipc.RunInfo
+	var pollErr error
 	for time.Now().Before(deadline) {
-		runs := h.Runs()
+		var runs []ipc.RunInfo
+		runs, pollErr = h.runs()
 		for i := range runs {
 			run := runs[i]
 			if run.ID != runID {
@@ -1984,18 +1989,24 @@ func waitForRunIDStatus(t *testing.T, h *Harness, runID string, status types.Run
 	}
 	h.dumpDebugState()
 	if lastRun != nil {
-		t.Fatalf("run %s did not reach %s in %v (%s)", runID, status, timeout, runProgress(lastRun))
+		t.Fatalf("run %s did not reach %s in %v (%s)", runID, status, timeout, polledRunProgress(lastRun, pollErr))
 	}
-	t.Fatalf("run %s did not appear while waiting for %s in %v", runID, status, timeout)
+	t.Fatalf("run %s did not appear while waiting for %s in %v (%s)", runID, status, timeout, polledRunProgress(nil, pollErr))
 	return nil
 }
 
+// waitForStepStatus polls until the named step of the newest run on branch
+// reaches status. A failed poll is polled again until the timeout, so an
+// unreachable daemon ends the wait with its own message, which carries the
+// last poll's error.
 func waitForStepStatus(t *testing.T, h *Harness, branch string, stepName types.StepName, status types.StepStatus, timeout time.Duration) *ipc.RunInfo {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	var lastRun *ipc.RunInfo
+	var pollErr error
 	for time.Now().Before(deadline) {
-		runs := h.Runs()
+		var runs []ipc.RunInfo
+		runs, pollErr = h.runs()
 		for i := range runs {
 			run := runs[i]
 			if run.Branch != branch {
@@ -2011,13 +2022,14 @@ func waitForStepStatus(t *testing.T, h *Harness, branch string, stepName types.S
 		time.Sleep(300 * time.Millisecond)
 	}
 	h.dumpDebugState()
+	progress := polledRunProgress(lastRun, pollErr)
 	if lastRun != nil {
 		if step, ok := findStep(lastRun.Steps, stepName); ok {
-			t.Fatalf("step %s for branch %s did not reach %s in %v (last status=%s; %s)", stepName, branch, status, timeout, step.Status, runProgress(lastRun))
+			t.Fatalf("step %s for branch %s did not reach %s in %v (last status=%s; %s)", stepName, branch, status, timeout, step.Status, progress)
 		}
-		t.Fatalf("step %s for branch %s did not appear in %v (%s)", stepName, branch, timeout, runProgress(lastRun))
+		t.Fatalf("step %s for branch %s did not appear in %v (%s)", stepName, branch, timeout, progress)
 	}
-	t.Fatalf("run for branch %s did not appear while waiting for %s in %v", branch, stepName, timeout)
+	t.Fatalf("run for branch %s did not appear while waiting for %s in %v (%s)", branch, stepName, timeout, progress)
 	return nil
 }
 
