@@ -244,11 +244,12 @@ func ReapAndLog(runIDs []string, reason string) {
 }
 
 // reapAndLog is ReapAndLog with the Runner and the pass's timeout given, for
-// tests. An engine that
-// does not answer is logged at debug level: it is a normal state of the
-// machine, and a warning at every run end and every daemon start would train
-// the operator to ignore the warning that matters, a labelled object that
-// would not go.
+// tests. An engine that refuses or fails the check is logged at debug level:
+// it is a normal state of the machine, and a warning at every run end and
+// every daemon start would train the operator to ignore the warning that
+// matters, a labelled object that would not go. A check that runs out of the
+// pass's time warns, since that engine may be running and holding the run's
+// objects.
 func reapAndLog(run Runner, timeout time.Duration, runIDs []string, reason string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
