@@ -440,7 +440,8 @@ func TestLivePiProfileResumeAfterDaemonRestartKeepsPin(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 	}
 	if respondErr != nil {
-		t.Fatalf("respond after restart: %v", respondErr)
+		h.dumpDebugState()
+		t.Fatalf("respond after restart: %v (%s)", respondErr, h.runProgressByID(parked.ID))
 	}
 
 	run := h.WaitForRun(branch, 120*time.Second)
