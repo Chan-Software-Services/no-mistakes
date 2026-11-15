@@ -27,6 +27,27 @@ type ReapResult struct {
 // that are not listed in the inventory or whose argv no longer matches the
 // recorded NM_HOME (so the shared service is never a target).
 func (inv *Inventory) ReapAll() ReapResult {
+	return inv.reap(func(Entry) bool { return true })
+}
+
+// ReapOrphaned is ReapAll for an inventory several live test processes may
+// share: it leaves each entry whose owner process still runs and is not this
+// one, and when that cannot be told. Two `go test` runs of the e2e package
+// with no suite wrapper share the default inventory, so a ReapAll at the
+// start or end of one stopped the daemons the other was still using.
+func (inv *Inventory) ReapOrphaned() ReapResult {
+	self := os.Getpid()
+	return inv.reap(func(e Entry) bool {
+		if e.OwnerPID <= 0 || e.OwnerPID == self {
+			return true
+		}
+		alive, err := processAlive(e.OwnerPID)
+		return err == nil && !alive
+	})
+}
+
+// reap reaps the inventory's entries that due accepts. Entries counts those.
+func (inv *Inventory) reap(due func(Entry) bool) ReapResult {
 	var result ReapResult
 	if inv == nil {
 		result.Errors = append(result.Errors, "nil inventory")
@@ -37,8 +58,11 @@ func (inv *Inventory) ReapAll() ReapResult {
 		result.Errors = append(result.Errors, err.Error())
 		return result
 	}
-	result.Entries = len(entries)
 	for _, e := range entries {
+		if !due(e) {
+			continue
+		}
+		result.Entries++
 		if err := inv.reapEntry(e, &result); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", e.ID, err))
 		}
