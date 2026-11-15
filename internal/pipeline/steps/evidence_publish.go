@@ -74,7 +74,10 @@ func publishRunEvidence(sctx *pipeline.StepContext) *evidenceLinks {
 		// with none of the bounding or home-path redaction the deliberate
 		// PR-body rendering applies. The name comes from the package that owns
 		// the location, so the two cannot drift.
-		ExcludeDirs:       []string{reviewqa.DirName},
+		// The test step's scratch directory is not evidence either: driver
+		// scripts and throwaway data the evidence turn needed, never meant
+		// for a reader.
+		ExcludeDirs:       []string{reviewqa.DirName, evidence.ScratchDirName},
 		Message:           fmt.Sprintf("no-mistakes: evidence for %s (run %s)", branch, sctx.Run.ID),
 		ForbiddenBranches: []string{branch, sctx.Repo.DefaultBranch},
 	})
