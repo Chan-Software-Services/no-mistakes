@@ -77,8 +77,8 @@ type Result struct {
 	Files []string
 }
 
-// Publish copies every regular file under req.SourceDir except images and
-// videos onto the evidence branch and pushes it.
+// Publish copies the text evidence under req.SourceDir (IsPublishableText)
+// onto the evidence branch and pushes it. Every other file stays local.
 //
 // The commit is built with plumbing against a scratch index, so the caller's
 // worktree, index, and HEAD are never touched. The new commit's parent is the
@@ -301,10 +301,10 @@ type collectedFile struct {
 	Mode string
 }
 
-// collectFiles lists the regular files under root in a deterministic order,
-// skipping any directory named in exclude (slash-separated, relative to root).
-// Symlinks are skipped: an evidence symlink would publish a pointer to a path
-// that only exists on the daemon host.
+// collectFiles lists the publishable files under root in a deterministic
+// order, skipping any directory named in exclude (slash-separated, relative to
+// root). Symlinks are skipped: an evidence symlink would publish a pointer to a
+// path that only exists on the daemon host.
 //
 // This is the single boundary every publication routes through, which is why
 // the exclusion belongs here rather than at a caller: an excluded directory is
@@ -312,9 +312,13 @@ type collectedFile struct {
 // the size and file-count budgets either - otherwise unpublishable content
 // could still fail the publication and drop real evidence back to local links.
 //
-// Image and video files are skipped the same way, before the budgets: no image
-// or video of the work leaves the machine, so the evidence branch carries no
-// image or video and is not a second way to upload screenshots (IsMedia).
+// Only text evidence is published (IsPublishableText): a known text type that
+// reads as text and carries no image or video inside it. Any other file stays
+// with the run on the machine and is skipped the same way, before the budgets:
+// a file of another type before its size is looked at, and a text-typed file
+// that fails the content check before it is counted. So no image or video of
+// the work leaves the machine by this branch, in a file of its own or inside
+// an archive, a report or a note.
 func collectFiles(root string, exclude []string) ([]collectedFile, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, nil
@@ -340,7 +344,7 @@ func collectFiles(root string, exclude []string) ([]collectedFile, error) {
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() || IsMedia("", d.Name()) {
+		if !d.Type().IsRegular() || !HasPublishableTextType(d.Name()) {
 			return nil
 		}
 		info, err := d.Info()
@@ -349,6 +353,13 @@ func collectFiles(root string, exclude []string) ([]collectedFile, error) {
 		}
 		if info.Size() > maxFileBytes {
 			return fmt.Errorf("evidence file %s is %d bytes, over the %d byte limit", d.Name(), info.Size(), maxFileBytes)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("read evidence file %s: %w", d.Name(), err)
+		}
+		if !IsPublishableText(d.Name(), data) {
+			return nil
 		}
 		total += info.Size()
 		if total > maxTotalBytes {

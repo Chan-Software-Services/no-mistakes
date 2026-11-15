@@ -445,6 +445,84 @@ func TestPublish_SkipsImageAndVideoFiles(t *testing.T) {
 	}
 }
 
+// TestPublish_PublishesOnlyTextEvidence pins the publication rule as an
+// allow-list: a file reaches the evidence branch only when it is a known text
+// type, reads as text, and carries no image or video inside it. Everything
+// else stays with the run on the machine, whatever its name, and is skipped
+// before the budgets so it cannot fail the publication of the text next to it.
+func TestPublish_PublishesOnlyTextEvidence(t *testing.T) {
+	remote, work := newRepoWithRemote(t)
+	source := writeEvidence(t, t.TempDir(), map[string]string{
+		// Published: plain text evidence.
+		"logs/cli-run.txt": "it works\n",
+		"results.json":     `{"passed": 3}` + "\n",
+		"junit.xml":        "<testsuite tests=\"3\"></testsuite>\n",
+		"summary.md":       "# Run\n\nAll three scenarios passed, see [the log](logs/cli-run.txt).\n",
+		"UPPER.LOG":        "upper case extension\n",
+		// Stays local: not a text type.
+		"trace.zip":         "PK\x03\x04 resources/page@1.png",
+		"report/index.html": `<html><body><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="></body></html>`,
+		"har/session.har":   `{"log":{"entries":[]}}`,
+		"server-output":     "a file with no extension\n",
+		"dump.bin":          "plain words in a binary-named file\n",
+		// Stays local: a text type that does not read as text.
+		"renamed.txt": "PK\x03\x04\x00\x00 archive bytes",
+		"latin1.log":  "caf\xe9\n",
+		// Stays local: a text type carrying an image or a video.
+		"notes.md":         "# Checkout\n\n![checkout page](checkout.png)\n",
+		"notes-html.md":    "# Checkout\n\n<IMG src=\"checkout.png\">\n",
+		"inline.json":      `{"screenshot":"data:image/png;base64,AAAA"}`,
+		"inline-video.txt": "recording: DATA:video/webm;base64,AAAA\n",
+		"bare-png.json":    `{"body":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"}`,
+		"bare-jpeg.log":    "response body /9j/4AAQSkZJRgABAQAAAQABAAD\n",
+		"bare-gif.yaml":    "body: R0lGODlhAQABAIAAAAAAAP\n",
+	})
+	for _, name := range []string{"huge-trace.zip", "huge.html"} {
+		if err := os.WriteFile(filepath.Join(source, name), make([]byte, maxFileBytes+1), 0o644); err != nil {
+			t.Fatalf("write oversized %s: %v", name, err)
+		}
+	}
+
+	result, err := Publish(context.Background(), baseRequest(remote, work, source))
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	want := "UPPER.LOG,junit.xml,logs/cli-run.txt,results.json,summary.md"
+	if got := strings.Join(result.Files, ","); got != want {
+		t.Fatalf("files = %q, want only the text evidence %q", got, want)
+	}
+	tree := runGit(t, remote, "ls-tree", "-r", "--name-only", "refs/heads/"+result.Branch)
+	wantTree := MarkerPath
+	for _, file := range result.Files {
+		wantTree += "\n" + result.Dir + "/" + file
+	}
+	if tree != wantTree {
+		t.Fatalf("published tree =\n%s\nwant the marker and the text evidence only:\n%s", tree, wantTree)
+	}
+}
+
+// Evidence with no text file in it is nothing to publish, and that must be "no
+// publication" rather than an empty commit on the branch.
+func TestPublish_NonTextEvidenceAlonePublishesNothing(t *testing.T) {
+	remote, work := newRepoWithRemote(t)
+	source := writeEvidence(t, t.TempDir(), map[string]string{
+		"trace.zip":         "PK\x03\x04",
+		"report/index.html": "<html></html>",
+		"notes.md":          "![checkout page](checkout.png)\n",
+	})
+
+	result, err := Publish(context.Background(), baseRequest(remote, work, source))
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("a source with no text evidence produced a publication: %+v", result)
+	}
+	if refs := runGit(t, remote, "for-each-ref", "--format=%(refname)"); refs != "refs/heads/main" {
+		t.Fatalf("remote refs changed: %q", refs)
+	}
+}
+
 // Media alone is nothing to publish, and that must be "no publication" rather
 // than an empty commit on the branch.
 func TestPublish_MediaAlonePublishesNothing(t *testing.T) {

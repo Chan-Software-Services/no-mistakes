@@ -1218,7 +1218,7 @@ func TestTestStep_PublishedEvidenceGuidanceNamesTheEvidenceBranch(t *testing.T) 
 
 	prompt := ag.calls[0].Prompt
 	wantDir := sctx.EvidenceDir
-	if !strings.Contains(prompt, "evidence files other than screenshots and recordings are published to the repository's team/ci/evidence branch automatically and linked from the PR: "+wantDir) {
+	if !strings.Contains(prompt, "text evidence files (logs, command output, JSON and similar) are published to the repository's team/ci/evidence branch automatically and linked from the PR, and every other file, screenshots, recordings, archives and HTML reports included, stays local with the run: "+wantDir) {
 		t.Fatalf("expected evidence-branch publishing guidance, got:\n%s", prompt)
 	}
 	if strings.Contains(prompt, "committed and pushed automatically") {

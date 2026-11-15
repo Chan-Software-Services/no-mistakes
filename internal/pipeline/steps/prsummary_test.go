@@ -1102,3 +1102,88 @@ func TestBuildTestingSummaryForPR_FallsBackForBinaryEvidence(t *testing.T) {
 		t.Fatalf("did not expect binary content to be embedded as text, got:\n%s", md)
 	}
 }
+
+// TestBuildTestingSummaryForPR_LabelsArtifactsWithoutLocalPathsOrFileNames pins
+// how a non-media artifact is named in the PR body: by the agent's label when
+// it says what the evidence is, by a neutral label when it names a file or a
+// path, and never by the local path of the file.
+func TestBuildTestingSummaryForPR_LabelsArtifactsWithoutLocalPathsOrFileNames(t *testing.T) {
+	evidenceRoot := filepath.Join(t.TempDir(), "evidence", "run-123")
+	tracePath := writeTempEvidenceFile(t, evidenceRoot, "trace.zip", []byte{'P', 'K', 0x03, 0x04, 0x00})
+	dumpPath := writeTempEvidenceFile(t, evidenceRoot, "heap.dump", []byte{0x00, 0x01, 0x02})
+	serverLogPath := writeTempEvidenceFile(t, evidenceRoot, "server.log", []byte("listening on :8080\n"))
+	loginLogPath := writeTempEvidenceFile(t, evidenceRoot, "login.txt", []byte("login accepted\n"))
+	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[`+
+		`{"kind":"other","label":"trace.zip","path":%q},`+
+		`{"kind":"other","label":"Heap capture","path":%q},`+
+		`{"kind":"log","label":"server.log","path":%q},`+
+		`{"kind":"log","label":"Login flow log","path":%q},`+
+		`{"kind":"command-output","label":"curl-output.txt","content":"HTTP/1.1 200 OK"},`+
+		`{"kind":"log","label":"Saved under /srv/app/run/boot","content":"boot finished"}`+
+		`]}`, tracePath, dumpPath, serverLogPath, loginLogPath)
+	steps := []*db.StepResult{
+		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
+	}
+	rounds := map[string][]*db.StepRound{
+		"s1": {{Round: 1, Trigger: "initial", FindingsJSON: &findings, DurationMS: 300}},
+	}
+
+	for _, provider := range []scm.Provider{scm.ProviderGitHub, scm.ProviderBitbucket} {
+		t.Run(string(provider), func(t *testing.T) {
+			md := BuildTestingSummaryForPRWithProvider(steps, rounds, "git@github.com:example/widgets.git", "abc123", t.TempDir(), evidenceRoot, nil, provider)
+			t.Logf("rendered PR testing markdown:\n%s", md)
+
+			for _, unwanted := range []string{
+				evidenceRoot, "trace.zip", "heap.dump", "server.log", "login.txt", "curl-output.txt", "/srv/app", "local file",
+			} {
+				if strings.Contains(md, unwanted) {
+					t.Errorf("PR body names %q", unwanted)
+				}
+			}
+			for _, want := range []string{
+				"- Evidence: Artifact (kept with the run, not published)",
+				"- Evidence: Heap capture (kept with the run, not published)",
+				"Evidence: Log",
+				"Evidence: Login flow log",
+				"Evidence: Command output",
+				"listening on :8080",
+				"login accepted",
+				"HTTP/1.1 200 OK",
+				"boot finished",
+			} {
+				if !strings.Contains(md, want) {
+					t.Errorf("PR body lost %q", want)
+				}
+			}
+		})
+	}
+}
+
+func TestPublicArtifactLabel(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		artifact types.TestArtifact
+		want     string
+	}{
+		{"plain words are kept", types.TestArtifact{Kind: "log", Label: "Login flow log"}, "Login flow log"},
+		{"a version number is not a file", types.TestArtifact{Kind: "log", Label: "Upgrade to v1.2 log"}, "Upgrade to v1.2 log"},
+		{"a route is not a local path", types.TestArtifact{Kind: "log", Label: "POST /checkout response"}, "POST /checkout response"},
+		{"a slash between words is kept", types.TestArtifact{Kind: "log", Label: "Request/response log"}, "Request/response log"},
+		{"a file name", types.TestArtifact{Kind: "log", Label: "server.log"}, "Log"},
+		{"a file name among words", types.TestArtifact{Kind: "command-output", Label: "Output of run.sh, captured"}, "Command output"},
+		{"a quoted file name", types.TestArtifact{Kind: "other", Label: "The `trace.zip` capture"}, "Artifact"},
+		{"an absolute path", types.TestArtifact{Kind: "log", Label: "Saved under /srv/app/run/boot"}, "Log"},
+		{"a home path", types.TestArtifact{Kind: "", Label: "~/evidence/boot"}, "Artifact"},
+		{"a relative path", types.TestArtifact{Kind: "other", Label: "./out/boot"}, "Artifact"},
+		{"a windows path", types.TestArtifact{Kind: "other", Label: `C:\runs\boot`}, "Artifact"},
+		{"the artifact's own file name without an extension", types.TestArtifact{Kind: "log", Label: "Contents of bootlog", Path: "/evidence/run/bootlog"}, "Log"},
+		{"no label stays no label", types.TestArtifact{Kind: "log", Label: "  "}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := publicArtifactLabel(tc.artifact); got != tc.want {
+				t.Fatalf("publicArtifactLabel(%q) = %q, want %q", tc.artifact.Label, got, tc.want)
+			}
+		})
+	}
+}

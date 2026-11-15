@@ -189,7 +189,7 @@ Previous test findings to address:
 	reassessHistory := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + planSection + testguidance.Rule
 	evidenceGuidance := fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree: %s", evidenceDir)
 	if sctx.Config.Test.Evidence.StoreInRepo {
-		evidenceGuidance = fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; evidence files other than screenshots and recordings are published to the repository's %s branch automatically and linked from the PR: %s", sctx.Config.Test.Evidence.Branch, evidenceDir)
+		evidenceGuidance = fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; text evidence files (logs, command output, JSON and similar) are published to the repository's %s branch automatically and linked from the PR, and every other file, screenshots, recordings, archives and HTML reports included, stays local with the run: %s", sctx.Config.Test.Evidence.Branch, evidenceDir)
 	}
 	configuredTestCommand := ""
 	if testCmd != "" {

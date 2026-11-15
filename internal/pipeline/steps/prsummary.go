@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -671,7 +672,7 @@ func renderTestingArtifact(artifact types.TestArtifact, opts testingSummaryOptio
 	if isMediaArtifact(artifact) {
 		return renderMediaArtifact(artifact)
 	}
-	label := sanitizePromptText(artifact.Label)
+	label := publicArtifactLabel(artifact)
 	if label == "" {
 		return ""
 	}
@@ -695,7 +696,7 @@ func renderTestingArtifact(artifact types.TestArtifact, opts testingSummaryOptio
 		if target != "" {
 			b.WriteString(fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target))
 		} else if localPath != "" {
-			b.WriteString(renderLocalArtifactLine(label, localPath, opts.flavor))
+			b.WriteString(renderLocalArtifactLine(label))
 		}
 	}
 	if descriptionLine != "" {
@@ -727,12 +728,12 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 		return ""
 	}
 
-	// No embeddable text: render a link or local-file reference (binaries).
+	// No embeddable text: render a link, or say the file stayed local (binaries).
 	if caption == "" && !hasFile {
 		if target != "" {
 			return fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target)
 		}
-		return renderLocalArtifactLine(label, localPath, opts.flavor)
+		return renderLocalArtifactLine(label)
 	}
 
 	fenceBody, descriptionLine := caption, ""
@@ -744,7 +745,7 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 	if target != "" {
 		inner.WriteString(fmt.Sprintf("Source: [%s](%s)\n\n", html.EscapeString(label), target))
 	} else if !hasFile && localPath != "" {
-		inner.WriteString(renderLocalArtifactReference("Source", label, localPath, opts.flavor))
+		inner.WriteString(renderLocalArtifactReference("Source", label))
 		inner.WriteString("\n")
 	}
 	if descriptionLine != "" {
@@ -1028,16 +1029,71 @@ func sameVolume(a, b string) bool {
 	return strings.EqualFold(filepath.VolumeName(a), filepath.VolumeName(b)) || filepath.VolumeName(a) == "" || filepath.VolumeName(b) == ""
 }
 
-func renderLocalArtifactLine(label, localPath string, flavor prBodyFlavor) string {
-	return renderLocalArtifactReference("- Evidence", label, localPath, flavor)
+// renderLocalArtifactLine names an artifact whose file is neither linked nor
+// embedded. The PR body is public and the file is not, so the line says only
+// that it exists and stayed with the run: never its path or its file name.
+func renderLocalArtifactLine(label string) string {
+	return renderLocalArtifactReference("- Evidence", label)
 }
 
-func renderLocalArtifactReference(prefix, label, localPath string, flavor prBodyFlavor) string {
-	path := "<code>" + html.EscapeString(localPath) + "</code>"
-	if flavor == prBodyMarkdown {
-		path = "`" + localPath + "`"
+func renderLocalArtifactReference(prefix, label string) string {
+	return fmt.Sprintf("%s: %s (kept with the run, not published)\n", prefix, html.EscapeString(label))
+}
+
+// neutralArtifactLabels are what an artifact is called, by its kind, when the
+// agent's label cannot be published.
+var neutralArtifactLabels = map[string]string{
+	"log":            "Log",
+	"command-output": "Command output",
+	"output":         "Command output",
+}
+
+// publicArtifactLabel is the name a non-media artifact carries in the PR body:
+// the agent's label when it says what the evidence is, and a neutral label for
+// its kind when the label names a file or a path, which agents routinely do.
+// A local file name says nothing to a reader of the PR and is not theirs to
+// see, so recognition errs toward the neutral label.
+func publicArtifactLabel(artifact types.TestArtifact) string {
+	label := sanitizePromptText(artifact.Label)
+	if label == "" || !labelNamesFile(label, artifact.Path) {
+		return label
 	}
-	return fmt.Sprintf("%s: %s (local file: %s)\n", prefix, html.EscapeString(label), path)
+	if neutral, ok := neutralArtifactLabels[strings.ToLower(strings.TrimSpace(artifact.Kind))]; ok {
+		return neutral
+	}
+	return "Artifact"
+}
+
+var (
+	// fileNameTokenPattern matches a word that ends in a file extension.
+	fileNameTokenPattern = regexp.MustCompile(`\.[A-Za-z][A-Za-z0-9]{0,7}$`)
+	// pathTokenPattern matches a word that is a filesystem path: home-relative,
+	// dot-relative, a Windows drive or share, or absolute with at least two
+	// segments (one segment, "/checkout", reads as a route).
+	pathTokenPattern = regexp.MustCompile(`^(?:~|\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\|/[^/]+/.)`)
+)
+
+// labelNamesFile reports whether any word of label is a file name or a path:
+// it ends in a file extension, it is a filesystem path, or it is the base name
+// of the artifact's own file.
+func labelNamesFile(label, artifactPath string) bool {
+	base := ""
+	if artifactPath != "" {
+		base = path.Base(filepath.ToSlash(artifactPath))
+	}
+	for _, word := range strings.Fields(label) {
+		word = strings.TrimRight(strings.Trim(word, "\"'`()[]{}<>,;:!?*"), ".")
+		if word == "" {
+			continue
+		}
+		if fileNameTokenPattern.MatchString(word) || pathTokenPattern.MatchString(word) || strings.Contains(word, "\\") {
+			return true
+		}
+		if base != "" && base != "." && base != "/" && word == base {
+			return true
+		}
+	}
+	return false
 }
 
 func sanitizeArtifactURL(target string) string {

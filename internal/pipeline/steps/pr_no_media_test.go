@@ -423,3 +423,47 @@ func TestComposeOwnedPRContent_NeverRewritesAuthorText(t *testing.T) {
 	}
 	assertNoMediaInPRBody(t, parts.appendix)
 }
+
+// TestNeutralizePRMedia_BreaksLessCommonLinkForms covers the link forms a forge
+// still resolves to an image, a video or an attachment although they do not
+// look like a plain media URL: a scheme-less www autolink, a reference-style
+// definition, a target or attribute value holding a space, an extension written
+// with entities or percent-encoding, and GitHub's extension-less asset URLs.
+// Ordinary links in the same forms are kept as written.
+func TestNeutralizePRMedia_BreaksLessCommonLinkForms(t *testing.T) {
+	t.Parallel()
+	const assetID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+	for _, tc := range []struct{ in, want string }{
+		{`see www.example.com/shots/a.png now`, `see (image link removed) now`},
+		{"[shot]: ./evidence/shot.png\n\nSee [the page][shot].", "\\[shot]: (image link removed)\n\nSee [the page][shot]."},
+		{"See [the page][shot].\n\n[shot]:\n  https://example.com/a.png", "See [the page][shot].\n\n\\[shot]:\n  (image link removed)"},
+		{`  [clip]: <media/my clip.mp4> "title"`, `  \[clip]: <(video link removed)> "title"`},
+		{`> [shot]: shot.png`, `> \[shot]: (image link removed)`},
+		{`[shot](<my shot.png>)`, `[shot]\(<my shot.png>)`},
+		{`<a href="my shot.png">x</a>`, `<\a href="(image link removed)">x</a>`},
+		{`<img src='my shot.png'>`, `<\img src='(image link removed)'>`},
+		{`<source srcset="a.webp 1x, b.webp 2x">`, `<\source srcset="(image link removed)">`},
+		{`https://example.com/a&#46;png`, `(image link removed)`},
+		{`https://example.com/a.pn&#x67;`, `(image link removed);`},
+		{`[shot](shots/a&period;png)`, `[shot]\(shots/a&period;png)`},
+		{`https://example.com/a%2Epng`, `(image link removed)`},
+		{`https://github.com/owner/repo/assets/12345/` + assetID, `(attachment link removed)`},
+		{`[shot](https://github.com/owner/repo/assets/12345/` + assetID + `)`, `[shot]\((attachment link removed))`},
+		{`https://github.com/user&#45;attachments/assets/` + assetID, `(attachment link removed)`},
+		// Ordinary links in the same forms.
+		{`see www.example.com/docs now`, `see www.example.com/docs now`},
+		{"[docs]: ./docs/guide.md\n\nSee [the guide][docs].", "[docs]: ./docs/guide.md\n\nSee [the guide][docs]."},
+		{`[log](<logs/my run.txt>)`, `[log](<logs/my run.txt>)`},
+		{`<a href="my notes.txt">x</a>`, `<a href="my notes.txt">x</a>`},
+		{`https://example.com/a&#46;txt`, `https://example.com/a&#46;txt`},
+		{`https://github.com/owner/repo/assets/readme`, `https://github.com/owner/repo/assets/readme`},
+	} {
+		got := neutralizePRMedia(tc.in)
+		if got != tc.want {
+			t.Errorf("neutralizePRMedia(%q)\n got %q\nwant %q", tc.in, got, tc.want)
+		}
+		if again := neutralizePRMedia(got); again != got {
+			t.Errorf("neutralizePRMedia is not idempotent on %q: %q", got, again)
+		}
+	}
+}
