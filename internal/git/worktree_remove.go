@@ -70,8 +70,19 @@ var ErrNotLinkedWorktree = errors.New("not a linked worktree of the repository")
 //
 // Unlike `git worktree remove --force`, this also removes a locked worktree
 // and one that holds submodules. A wtPath that is not a linked worktree of
-// repoDir is refused untouched with ErrNotLinkedWorktree. A removal that fails
-// part way can be retried.
+// repoDir is refused untouched with ErrNotLinkedWorktree, and so is one whose
+// admin entry does not point back at it.
+//
+// Two limits follow from finding the admin entry through wtPath's .git file:
+//
+//   - A registered worktree whose working directory, or its .git file, is
+//     already gone is refused with ErrNotLinkedWorktree and stays registered,
+//     where `git worktree remove --force` unregistered it. Git's own prune
+//     takes such an entry in time.
+//   - A removal that failed part way can be retried only until a later
+//     removal on the same repository sweeps the admin entry, a
+//     removedWorktreeGrace later. After that the retry is refused the same
+//     way and the working directory is left to the caller.
 func WorktreeRemove(ctx context.Context, repoDir, wtPath string) error {
 	adminDir, err := worktreeAdminDir(ctx, repoDir, wtPath)
 	if err != nil {
@@ -126,7 +137,46 @@ func worktreeAdminDir(ctx context.Context, repoDir, wtPath string) (string, erro
 	if filepath.Dir(adminDir) != worktreesDir {
 		return "", fmt.Errorf("%s: %w %s: its admin directory is %s", wtPath, ErrNotLinkedWorktree, repoDir, adminDir)
 	}
+	if err := adminEntryIsFor(adminDir, wtPath); err != nil {
+		return "", fmt.Errorf("%s: %w %s: admin directory %s: %v", wtPath, ErrNotLinkedWorktree, repoDir, adminDir, err)
+	}
 	return adminDir, nil
+}
+
+// adminEntryIsFor checks that the admin entry adminDir is the one of the
+// working directory wtPath, whose .git file named it. That file is inside the
+// working directory, where a process of the run can rewrite it to name another
+// worktree's entry. The entry's gitdir file must name wtPath's .git file; an
+// entry without one is accepted only with this package's lock file, which is
+// the state an earlier WorktreeRemove of wtPath that failed part way left.
+func adminEntryIsFor(adminDir, wtPath string) error {
+	data, err := os.ReadFile(filepath.Join(adminDir, worktreeAdminGitdir))
+	if os.IsNotExist(err) {
+		reason, err := os.ReadFile(filepath.Join(adminDir, worktreeAdminLocked))
+		if err != nil || string(reason) != removedWorktreeLockReason {
+			return errors.New("it has no gitdir file and was not unlisted by an earlier removal")
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	back := strings.TrimSpace(string(data))
+	if !filepath.IsAbs(back) {
+		back = filepath.Join(adminDir, back)
+	}
+	backDir, err := filepath.EvalSymlinks(filepath.Dir(back))
+	if err != nil {
+		return fmt.Errorf("resolve its gitdir file's %s: %v", back, err)
+	}
+	wtDir, err := filepath.EvalSymlinks(wtPath)
+	if err != nil {
+		return err
+	}
+	if filepath.Base(back) != ".git" || backDir != wtDir {
+		return fmt.Errorf("its gitdir file names %s", back)
+	}
+	return nil
 }
 
 // removeWorktreeDirectory deletes the working directory at wtPath, its .git

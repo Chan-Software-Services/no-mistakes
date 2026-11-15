@@ -349,3 +349,64 @@ func TestWorktreeRemoveRemovesALockedWorktree(t *testing.T) {
 		t.Fatal("git still lists the locked worktree after removal")
 	}
 }
+
+// The admin entry comes from the working directory's own .git file, which a
+// process in the run can rewrite. An entry that does not point back at the
+// working directory belongs to another worktree and is left alone.
+func TestWorktreeRemoveRefusesAnAdminEntryThatPointsAtAnotherWorktree(t *testing.T) {
+	f := newWorktreeRemoveFixture(t)
+	other := filepath.Join(t.TempDir(), "run-2")
+	if err := WorktreeAdd(f.ctx, f.bare, other, f.sha); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
+	otherAdmin := filepath.Join(f.bare, "worktrees", "run-2")
+	if err := os.WriteFile(filepath.Join(f.wt, ".git"), []byte("gitdir: "+otherAdmin+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WorktreeRemove(f.ctx, f.bare, f.wt); !errors.Is(err, ErrNotLinkedWorktree) {
+		t.Fatalf("WorktreeRemove through a .git file naming another worktree's entry = %v, want ErrNotLinkedWorktree", err)
+	}
+
+	if got, err := Run(f.ctx, other, "rev-parse", "HEAD"); err != nil || got != f.sha {
+		t.Fatalf("the other worktree after the refusal: rev-parse = %q, %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(otherAdmin, "locked")); !os.IsNotExist(err) {
+		t.Fatalf("the other worktree's entry was locked (lstat error %v)", err)
+	}
+	if entries, err := os.ReadDir(f.wt); err != nil || len(entries) < 2 {
+		t.Fatalf("the refused working directory was emptied: %d entries, %v", len(entries), err)
+	}
+
+	// An entry with no gitdir file is taken only when this code unlisted it.
+	if err := os.Remove(filepath.Join(otherAdmin, "gitdir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WorktreeRemove(f.ctx, f.bare, f.wt); !errors.Is(err, ErrNotLinkedWorktree) {
+		t.Fatalf("WorktreeRemove of an entry somebody else unlisted = %v, want ErrNotLinkedWorktree", err)
+	}
+	if _, err := os.Stat(filepath.Join(otherAdmin, "HEAD")); err != nil {
+		t.Fatalf("an entry somebody else unlisted was cleared: %v", err)
+	}
+}
+
+// A worktree linked with relative paths names its admin entry, and is named by
+// it, relative to where each file lives.
+func TestWorktreeRemoveRemovesAWorktreeLinkedWithRelativePaths(t *testing.T) {
+	f := newWorktreeRemoveFixture(t)
+	wt := filepath.Join(t.TempDir(), "relative")
+	if _, err := Run(f.ctx, f.bare, "worktree", "add", "--relative-paths", "--detach", wt, f.sha); err != nil {
+		t.Skipf("git worktree add --relative-paths: %v", err)
+	}
+
+	if err := WorktreeRemove(f.ctx, f.bare, wt); err != nil {
+		t.Fatalf("WorktreeRemove: %v", err)
+	}
+
+	if _, err := os.Lstat(wt); !os.IsNotExist(err) {
+		t.Fatalf("worktree directory still exists (lstat error %v)", err)
+	}
+	if names := adminEntryNames(t, filepath.Join(f.bare, "worktrees", "relative")); !slices.Equal(names, []string{"commondir", "locked"}) {
+		t.Fatalf("removed worktree's admin directory holds %v, want only commondir and locked", names)
+	}
+}
