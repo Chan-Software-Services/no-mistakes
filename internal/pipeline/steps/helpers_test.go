@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -70,72 +69,13 @@ func lastCommitMessage(t *testing.T, dir string) string {
 	return gitCmd(t, dir, "log", "-1", "--pretty=%s")
 }
 
-// gitRepoTemplate holds a cached template repo that setupGitRepo copies from
-// instead of running git init + config + commits each time.
-var gitRepoTemplate struct {
-	once    sync.Once
-	dir     string
-	baseSHA string
-	headSHA string
-}
-
-func ensureGitRepoTemplate(t *testing.T) {
-	t.Helper()
-	gitRepoTemplate.once.Do(func() {
-		dir, err := os.MkdirTemp("", "git-template-*")
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		run := func(args ...string) string {
-			cmd := exec.Command("git", args...)
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(),
-				"GIT_AUTHOR_NAME=test",
-				"GIT_AUTHOR_EMAIL=test@test.com",
-				"GIT_COMMITTER_NAME=test",
-				"GIT_COMMITTER_EMAIL=test@test.com",
-			)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				panic(fmt.Sprintf("git %v: %v: %s", args, err, out))
-			}
-			return strings.TrimSpace(string(out))
-		}
-
-		run("init")
-		run("config", "user.name", "test")
-		run("config", "user.email", "test@test.com")
-		run("checkout", "-b", "main")
-
-		os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base content"), 0o644)
-		run("add", "-A")
-		run("commit", "-m", "base commit")
-		gitRepoTemplate.baseSHA = run("rev-parse", "HEAD")
-
-		run("checkout", "-b", "feature")
-		os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature code\n"), 0o644)
-		run("add", "-A")
-		run("commit", "-m", "add feature")
-		gitRepoTemplate.headSHA = run("rev-parse", "HEAD")
-
-		gitRepoTemplate.dir = dir
-	})
-}
-
 // setupGitRepo creates a git repo with a base commit on main and a head commit on feature.
 // Returns (repoDir, baseSHA, headSHA).
-// Uses a cached template repo and copies it via cp -a for speed.
+// It copies stepstest's cached template repo, which the stepstest.Init
+// cleanup in TestMain removes.
 func setupGitRepo(t *testing.T) (string, string, string) {
 	t.Helper()
-	ensureGitRepoTemplate(t)
-
-	dir := t.TempDir()
-	if err := copyDirContents(gitRepoTemplate.dir, dir); err != nil {
-		t.Fatalf("copy template repo: %v", err)
-	}
-
-	return dir, gitRepoTemplate.baseSHA, gitRepoTemplate.headSHA
+	return stepstest.SetupGitRepo(t)
 }
 
 // ensureHermeticOrigin gives a test repo that lacks an "origin" remote a
