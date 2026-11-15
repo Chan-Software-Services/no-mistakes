@@ -33,6 +33,8 @@ func TestIsPublishableText(t *testing.T) {
 		{"base64 PNG header", "capture.json", `{"body":"iVBORw0KGgoAAAANSUhEUg"}`, false},
 		{"base64 JPEG header", "capture.txt", "body: /9j/4AAQSkZJRgABAQ", false},
 		{"base64 JPEG header starting with a quantization table", "capture.json", `{"body":"/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcU"}`, false},
+		{"base64 JPEG header starting with a comment", "capture.json", `{"body":"/9j//gAQTGF2YzU4LjU0LjEwMAD/2wBDAAgGBgcGBQgHBwcJ"}`, false},
+		{"base64 JPEG header starting with a Huffman table", "capture.json", `{"body":"/9j/xAAfAAABBQEBAQEBAQAAAAAAAAAAAQIDBAUGBwgJCgv"}`, false},
 		{"base64 MP4 header", "capture.json", `{"clip":"AAAAIGZ0eXBpc29tAAACAGlzb21pc28y"}`, false},
 		{"base64 WebM header", "capture.json", `{"clip":"GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYEC"}`, false},
 		{"base64 GIF header", "capture.txt", "body: R0lGODlhAQABAIAAAP", false},

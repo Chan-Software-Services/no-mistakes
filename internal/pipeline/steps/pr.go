@@ -457,13 +457,16 @@ var (
 	// prAssetPathPattern matches GitHub's extension-less asset path.
 	prAssetPathPattern = regexp.MustCompile(`(?i)/assets/[0-9]+/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	// prDataURIPattern matches an image or a video written inline as a data
-	// URI.
-	prDataURIPattern = regexp.MustCompile(`(?i)\bdata:(?:image|video)/[^\s<>"'\x60()\[\]]*`)
+	// URI, wherever it starts: after an emphasis marker, a letter or a digit
+	// too.
+	prDataURIPattern = regexp.MustCompile(`(?i)data:(?:image|video)/[^\s<>"'\x60()\[\]]*`)
 	// prURLPattern matches a URL with a scheme or a scheme-less "www." one,
 	// parentheses included; a trailing unbalanced ")" or punctuation is trimmed
-	// the way forges' autolinkers do. The URL starts the text or follows
+	// the way forges' autolinkers do. A "www." URL starts the text or follows
 	// anything but a letter or a digit, emphasis markers such as "_" included.
-	prURLPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])((?:[a-z][a-z0-9+.-]*://|www\.)[^\s<>"'\x60\[\]]+)`)
+	// A URL with a scheme starts anywhere, since a forge's autolinker finds
+	// the scheme from "://" backwards and so reads one straight after a digit.
+	prURLPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(www\.[^\s<>"'\x60\[\]]+)|([a-z][a-z0-9+.-]*://[^\s<>"'\x60\[\]]+)`)
 )
 
 // neutralizePRMedia rewrites text so no image or video can render or be linked
@@ -517,7 +520,9 @@ func neutralizePRMedia(text string) string {
 		return mediaLinkNote(prMediaAttachment)
 	})
 	text = prDataURIPattern.ReplaceAllStringFunc(text, func(raw string) string {
-		return mediaLinkNote(prMediaTargetKind(raw))
+		// A closing emphasis marker is text around the URI, not part of it.
+		uri := strings.TrimRight(raw, "_*~")
+		return mediaLinkNote(prMediaTargetKind(uri)) + raw[len(uri):]
 	})
 	text = replaceSubmatchFunc(prURLPattern, text, func(match string, start, end int) string {
 		link, tail := trimURLTail(match[start:end])

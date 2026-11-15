@@ -40,10 +40,10 @@ const (
 	// inlineMediaExpr matches an image or a video carried inside text: a data
 	// URI, or the base64 form of a file header, which is how a report, a
 	// capture or a JSON payload holds a screenshot or a recording without
-	// naming it: PNG, JPEG (first segment an application marker or a
-	// quantization table), GIF, RIFF (WebP, AVI), MP4 (an "ftyp" box at offset
+	// naming it: PNG, JPEG (the start-of-image marker and the first
+	// byte of any segment after it), GIF, RIFF (WebP, AVI), MP4 (an "ftyp" box at offset
 	// 4) and WebM (the EBML magic).
-	inlineMediaExpr = `(?i:data:\s*(?:image|video)/)|iVBORw0KGgo|/9j/[24-7]|R0lGOD[lh]h|UklGR|AAAA[A-Za-z0-9+/][GWm2]Z0eX|GkXfo`
+	inlineMediaExpr = `(?i:data:\s*(?:image|video)/)|iVBORw0KGgo|/9j/|R0lGOD[lh]h|UklGR|AAAA[A-Za-z0-9+/][GWm2]Z0eX|GkXfo`
 )
 
 var (
