@@ -389,7 +389,7 @@ func TestPublish_ExcludedDirectoryIsNeverCollected(t *testing.T) {
 		"review/answers.ndjson":   `{"id":"q1","answer":"no","answered_by":"captain"}`,
 	})
 	big := filepath.Join(source, "review", "huge.ndjson")
-	if err := os.WriteFile(big, make([]byte, maxFileBytes+1), 0o644); err != nil {
+	if err := os.WriteFile(big, make([]byte, MaxFileBytes+1), 0o644); err != nil {
 		t.Fatalf("write oversized excluded file: %v", err)
 	}
 
@@ -426,7 +426,7 @@ func TestPublish_SkipsImageAndVideoFiles(t *testing.T) {
 		"command-output.md": "# output\n",
 	})
 	big := filepath.Join(source, "recording.webm")
-	if err := os.WriteFile(big, make([]byte, maxFileBytes+1), 0o644); err != nil {
+	if err := os.WriteFile(big, make([]byte, MaxFileBytes+1), 0o644); err != nil {
 		t.Fatalf("write oversized recording: %v", err)
 	}
 
@@ -478,7 +478,7 @@ func TestPublish_PublishesOnlyTextEvidence(t *testing.T) {
 		"bare-gif.yaml":    "body: R0lGODlhAQABAIAAAAAAAP\n",
 	})
 	for _, name := range []string{"huge-trace.zip", "huge.html"} {
-		if err := os.WriteFile(filepath.Join(source, name), make([]byte, maxFileBytes+1), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(source, name), make([]byte, MaxFileBytes+1), 0o644); err != nil {
 			t.Fatalf("write oversized %s: %v", name, err)
 		}
 	}

@@ -198,9 +198,11 @@ func updateOwnedPR(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, initia
 
 // Restamping is also an owner-authorized appendix edit. Recompute its integrity
 // guard without touching author text, while refusing evidence edited by anyone
-// else. Legacy unmarked bodies retain the existing restamp contract.
+// else. A legacy unmarked body has no guard to recompute: its attestation is
+// rebound in place, as before.
 //
-// What is written back carries no image or video either (neutralizePRMedia):
+// What is written back, in either shape, carries no image or video
+// (neutralizePRMedia):
 // the generated appendix of an owned body, never the author's text around it,
 // and the whole of an unmarked body, which the pipeline generated in full. So a
 // body written before a media form was neutralized gets no new revision that

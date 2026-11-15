@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/evidence"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -664,9 +666,21 @@ func TestBuildTestingSummaryForPR_ArtifactContentCannotSpoofFoldBoundary(t *test
 	}
 }
 
-func TestBuildTestingSummaryForPR_RendersEvidenceArtifactsCompactly(t *testing.T) {
+// TestBuildTestingSummaryForPR_LinksOnlyFilesInThePushedTree covers an
+// artifact reported by a repository path: it is linked when the file is in the
+// tree at the pushed head, and named by its label alone when it is not.
+func TestBuildTestingSummaryForPR_LinksOnlyFilesInThePushedTree(t *testing.T) {
 	t.Parallel()
-	findings := `{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"screenshot","label":"Checkout screenshot","path":"artifacts/checkout.png","content":"The checkout page shows the order total."},{"kind":"log","label":"Server log","path":"artifacts/server.log"},{"kind":"log","label":"Placement rectangle evidence","content":"{\"button\":{\"top\":169,\"left\":248,\"right\":272,\"bottom\":193}}"}]}`
+	repoRoot, _, headSHA := setupGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(repoRoot, "test-results"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	untracked := filepath.Join(repoRoot, "test-results", "trace.zip")
+	if err := os.WriteFile(untracked, []byte("PK"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracked := strings.Fields(gitCmd(t, repoRoot, "ls-tree", "-r", "--name-only", headSHA))[0]
+	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"other","label":"trace.zip","path":"test-results/trace.zip"},{"kind":"other","label":"Run output","path":%q},{"kind":"other","label":"Tracked file","path":%q}]}`, untracked, tracked)
 	steps := []*db.StepResult{
 		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
 	}
@@ -674,19 +688,50 @@ func TestBuildTestingSummaryForPR_RendersEvidenceArtifactsCompactly(t *testing.T
 		"s1": {{Round: 1, Trigger: "initial", FindingsJSON: &findings, DurationMS: 300}},
 	}
 
-	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", "abc123", t.TempDir(), "", nil)
+	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", headSHA, repoRoot, "", nil)
+	t.Logf("rendered PR testing markdown:\n%s", md)
+
+	for _, unwanted := range []string{"test-results", "trace.zip"} {
+		if strings.Contains(md, unwanted) {
+			t.Errorf("a file that is not in the pushed tree must not be named or linked, found %q", unwanted)
+		}
+	}
+	for _, want := range []string{
+		"- Evidence: Artifact (kept with the run, not published)",
+		"- Evidence: Run output (kept with the run, not published)",
+		"- Evidence: [Tracked file](https://github.com/example/widgets/blob/" + headSHA + "/" + tracked + ")",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("expected %q", want)
+		}
+	}
+}
+
+func TestBuildTestingSummaryForPR_RendersEvidenceArtifactsCompactly(t *testing.T) {
+	t.Parallel()
+	repoRoot, _, headSHA := setupGitRepo(t)
+	serverLog := strings.Fields(gitCmd(t, repoRoot, "ls-tree", "-r", "--name-only", headSHA))[0]
+	findings := `{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"screenshot","label":"Checkout screenshot","path":"artifacts/checkout.png","content":"The checkout page shows the order total."},{"kind":"log","label":"Server log","path":"` + serverLog + `"},{"kind":"log","label":"Placement rectangle evidence","content":"{\"button\":{\"top\":169,\"left\":248,\"right\":272,\"bottom\":193}}"}]}`
+	steps := []*db.StepResult{
+		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
+	}
+	rounds := map[string][]*db.StepRound{
+		"s1": {{Round: 1, Trigger: "initial", FindingsJSON: &findings, DurationMS: 300}},
+	}
+
+	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", headSHA, repoRoot, "", nil)
 	t.Logf("rendered PR testing markdown:\n%s", md)
 
 	if !strings.Contains(md, "- Screenshot: The checkout page shows the order total.") {
 		t.Fatalf("expected screenshot to render as its caption, got:\n%s", md)
 	}
-	if !strings.Contains(md, "[Server log](https://github.com/example/widgets/blob/abc123/artifacts/server.log)") {
+	if !strings.Contains(md, "[Server log](https://github.com/example/widgets/blob/"+headSHA+"/"+serverLog+")") {
 		t.Fatalf("expected log path to render as GitHub blob URL, got:\n%s", md)
 	}
 	if !strings.Contains(md, "<details>\n<summary>Evidence: Placement rectangle evidence</summary>") || !strings.Contains(md, "```text\n{\"button\":{\"top\":169,\"left\":248,\"right\":272,\"bottom\":193}}\n```") {
 		t.Fatalf("expected content artifact to render in collapsible details, got:\n%s", md)
 	}
-	for _, broken := range []string{"Checkout screenshot", "checkout.png", "raw.githubusercontent.com", "](artifacts/server.log)"} {
+	for _, broken := range []string{"Checkout screenshot", "checkout.png", "raw.githubusercontent.com", "](" + serverLog + ")"} {
 		if strings.Contains(md, broken) {
 			t.Fatalf("did not expect broken or noisy artifact rendering %q, got:\n%s", broken, md)
 		}
@@ -947,7 +992,7 @@ func TestBuildTestingSummaryForPR_PreservesPublicURLForEmbeddedTextEvidence(t *t
 
 func TestBuildTestingSummaryForPR_EmbedsRepoTextEvidenceContent(t *testing.T) {
 	t.Parallel()
-	repoRoot := t.TempDir()
+	repoRoot, _, _ := setupGitRepo(t)
 	if err := os.MkdirAll(filepath.Join(repoRoot, "artifacts"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -955,6 +1000,9 @@ func TestBuildTestingSummaryForPR_EmbedsRepoTextEvidenceContent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoRoot, "artifacts", "server.log"), []byte(fileBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	gitCmd(t, repoRoot, "add", "artifacts/server.log")
+	gitCmd(t, repoRoot, "commit", "-m", "add the server log")
+	headSHA := gitCmd(t, repoRoot, "rev-parse", "HEAD")
 	findings := `{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"log","label":"Server log","path":"artifacts/server.log"}]}`
 	steps := []*db.StepResult{
 		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
@@ -963,13 +1011,13 @@ func TestBuildTestingSummaryForPR_EmbedsRepoTextEvidenceContent(t *testing.T) {
 		"s1": {{Round: 1, Trigger: "initial", FindingsJSON: &findings, DurationMS: 300}},
 	}
 
-	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", "abc123", repoRoot, "", nil)
+	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", headSHA, repoRoot, "", nil)
 	t.Logf("rendered PR testing markdown:\n%s", md)
 
 	if strings.Contains(md, fileBody) || strings.Contains(md, "```text") {
 		t.Fatalf("did not expect repo-relative file content to be embedded, got:\n%s", md)
 	}
-	if !strings.Contains(md, "[Server log](https://github.com/example/widgets/blob/abc123/artifacts/server.log)") {
+	if !strings.Contains(md, "[Server log](https://github.com/example/widgets/blob/"+headSHA+"/artifacts/server.log)") {
 		t.Fatalf("expected repo-relative artifact to render as a blob link, got:\n%s", md)
 	}
 }
@@ -1144,6 +1192,30 @@ func TestBuildTestingSummaryForPR_EmbedsOnlyPublishableText(t *testing.T) {
 	}
 }
 
+// TestBuildTestingSummaryForPR_NeverScansAFileTooLargeToPublish pins the size
+// bound the PR body shares with the evidence branch: a text file over
+// evidence.MaxFileBytes is listed as kept with the run, not read for a preview.
+func TestBuildTestingSummaryForPR_NeverScansAFileTooLargeToPublish(t *testing.T) {
+	t.Parallel()
+	evidenceRoot := filepath.Join(t.TempDir(), "evidence", "run-123")
+	line := []byte("request served in 12ms\n")
+	huge := bytes.Repeat(line, int(evidence.MaxFileBytes)/len(line)+1)
+	hugePath := writeTempEvidenceFile(t, evidenceRoot, "server.log", huge)
+	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"label":"Server log","path":%q}]}`, hugePath)
+	steps := []*db.StepResult{
+		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
+	}
+	rounds := map[string][]*db.StepRound{
+		"s1": {{Round: 1, Trigger: "initial", FindingsJSON: &findings, DurationMS: 300}},
+	}
+
+	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", "abc123", t.TempDir(), evidenceRoot, nil)
+
+	if !strings.Contains(md, "- Evidence: Server log (kept with the run, not published)") || strings.Contains(md, "request served") {
+		t.Fatalf("expected a file over the publication size limit to be listed, not embedded, got:\n%s", md[:min(len(md), 600)])
+	}
+}
+
 // TestBuildTestingSummaryForPR_LabelsArtifactsWithoutLocalPathsOrFileNames pins
 // how a non-media artifact is named in the PR body: by the agent's label when
 // it says what the evidence is, by a neutral label when it names a file or a
@@ -1218,6 +1290,11 @@ func TestPublicArtifactLabel(t *testing.T) {
 		{"a home path", types.TestArtifact{Kind: "", Label: "~/evidence/boot"}, "Artifact"},
 		{"a relative path", types.TestArtifact{Kind: "other", Label: "./out/boot"}, "Artifact"},
 		{"a windows path", types.TestArtifact{Kind: "other", Label: `C:\runs\boot`}, "Artifact"},
+		{"a file name with a possessive", types.TestArtifact{Kind: "log", Label: "server.log's tail"}, "Log"},
+		{"a file name in curly quotes", types.TestArtifact{Kind: "log", Label: "\u201cserver.log\u201d output"}, "Log"},
+		{"a file name in emphasis", types.TestArtifact{Kind: "log", Label: "_server.log_"}, "Log"},
+		{"a file name joined to a word", types.TestArtifact{Kind: "log", Label: "run.sh-output"}, "Log"},
+		{"a long extension", types.TestArtifact{Kind: "log", Label: "Contents of app.properties"}, "Log"},
 		{"the artifact's own file name without an extension", types.TestArtifact{Kind: "log", Label: "Contents of bootlog", Path: "/evidence/run/bootlog"}, "Log"},
 		{"no label stays no label", types.TestArtifact{Kind: "log", Label: "  "}, ""},
 	} {

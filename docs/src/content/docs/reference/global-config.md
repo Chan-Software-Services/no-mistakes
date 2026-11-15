@@ -1023,7 +1023,7 @@ When `store_in_repo` is true for a GitHub repository, the PR step copies that di
 A text evidence file has one of these extensions: `.txt`, `.log`, `.out`, `.err`, `.md`, `.markdown`, `.json`, `.jsonl`, `.ndjson`, `.yaml`, `.yml`, `.toml`, `.csv`, `.tsv`, `.xml`, `.diff`, `.patch`, `.tap`.
 It must also read as UTF-8 text and carry no image or video inside it (for example as a data URI), and a Markdown file must hold no image embed.
 Every other file, such as a screenshot, a recording, an archive, a browser trace or an HTML report, stays on local disk with the run and does not count against the publication limits.
-The PR body embeds evidence text by the same rule.
+The PR body embeds evidence text by the same rule, and links a repository file only when it is in the pushed tree.
 The branch is an orphan: it shares no history with your code branches, so evidence never reaches the default branch. Links use the evidence commit rather than the branch, so they keep resolving after later runs.
 Branch slashes become nested directories, unsafe branch characters are replaced, and an empty branch slug falls back to the run ID.
 `branch` must be a valid Git branch name; an invalid value fails the config with the offending key and value.

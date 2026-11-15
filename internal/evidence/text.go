@@ -38,10 +38,12 @@ const (
 	// "<image" is listed because HTML parsers read it as "<img".
 	mediaTagExpr = `(?i:<(?:img|image|picture|source|video|svg|embed|object|iframe)\b)`
 	// inlineMediaExpr matches an image or a video carried inside text: a data
-	// URI, or the base64 form of a PNG, JPEG, GIF or RIFF (WebP, AVI) file
-	// header, which is how a report, a capture or a JSON payload holds a
-	// screenshot without naming it.
-	inlineMediaExpr = `(?i:data:\s*(?:image|video)/)|iVBORw0KGgo|/9j/[4-7]|R0lGOD[lh]h|UklGR`
+	// URI, or the base64 form of a file header, which is how a report, a
+	// capture or a JSON payload holds a screenshot or a recording without
+	// naming it: PNG, JPEG (first segment an application marker or a
+	// quantization table), GIF, RIFF (WebP, AVI), MP4 (an "ftyp" box at offset
+	// 4) and WebM (the EBML magic).
+	inlineMediaExpr = `(?i:data:\s*(?:image|video)/)|iVBORw0KGgo|/9j/[24-7]|R0lGOD[lh]h|UklGR|AAAA[A-Za-z0-9+/][GWm2]Z0eX|GkXfo`
 )
 
 var (

@@ -443,8 +443,9 @@ var (
 	// a resource, relative paths included.
 	prLinkAttributePattern = regexp.MustCompile(`(?i)\b(?:href|src|srcset|poster|data)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)'|["']?([^"'\s>]+))`)
 	// prMarkdownLinkPattern finds a Markdown inline link or image and its
-	// target, in the plain form or the angle-bracket form that may hold a space.
-	prMarkdownLinkPattern = regexp.MustCompile(`\]\(\s*(?:<([^>\n]*)>|([^)\s>]*))`)
+	// target, in the angle-bracket form that may hold a space or the plain
+	// form, which may hold one level of balanced parentheses.
+	prMarkdownLinkPattern = regexp.MustCompile(`\]\(\s*(?:<([^>\n]*)>|((?:[^()\s>]|\([^()\s]*\))*))`)
 	// prReferenceDefinitionPattern finds a Markdown link reference definition
 	// ("[label]: target"), inside a quote or a list item too, with the target on
 	// the same line or the next and in the plain or the angle-bracket form.
@@ -460,8 +461,9 @@ var (
 	prDataURIPattern = regexp.MustCompile(`(?i)\bdata:(?:image|video)/[^\s<>"'\x60()\[\]]*`)
 	// prURLPattern matches a URL with a scheme or a scheme-less "www." one,
 	// parentheses included; a trailing unbalanced ")" or punctuation is trimmed
-	// the way forges' autolinkers do.
-	prURLPattern = regexp.MustCompile(`(?i)(?:\b[a-z][a-z0-9+.-]*://|\bwww\.)[^\s<>"'\x60\[\]]+`)
+	// the way forges' autolinkers do. The URL starts the text or follows
+	// anything but a letter or a digit, emphasis markers such as "_" included.
+	prURLPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])((?:[a-z][a-z0-9+.-]*://|www\.)[^\s<>"'\x60\[\]]+)`)
 )
 
 // neutralizePRMedia rewrites text so no image or video can render or be linked
@@ -517,13 +519,13 @@ func neutralizePRMedia(text string) string {
 	text = prDataURIPattern.ReplaceAllStringFunc(text, func(raw string) string {
 		return mediaLinkNote(prMediaTargetKind(raw))
 	})
-	text = prURLPattern.ReplaceAllStringFunc(text, func(raw string) string {
-		link, tail := trimURLTail(raw)
+	text = replaceSubmatchFunc(prURLPattern, text, func(match string, start, end int) string {
+		link, tail := trimURLTail(match[start:end])
 		kind := prMediaTargetKind(link)
 		if kind == "" {
-			return raw
+			return match
 		}
-		return mediaLinkNote(kind) + tail
+		return match[:start] + mediaLinkNote(kind) + tail
 	})
 	text = strings.ReplaceAll(text, "![", "!\\[")
 	return evidence.MediaTagPattern.ReplaceAllStringFunc(text, func(tag string) string {
@@ -542,11 +544,12 @@ func mediaLinkNote(kind string) string {
 }
 
 // prMediaTargetKind classifies a link target as an attachment, a video or an
-// image (by its extension, or as an inline data URI), or "" for anything else. It is the one owner of that decision for
-// every link form neutralizePRMedia reads. A forge resolves a target after
-// decoding character references and percent-encoding, so the target is read as
-// written and in both decoded forms, and a value holding several targets or a
-// space (a srcset, a quoted path) is read whole and field by field.
+// image (by its extension, or as an inline data URI), or "" for anything else.
+// It is the one owner of that decision for every link form neutralizePRMedia
+// reads. A forge resolves a target after decoding character references and
+// percent-encoding, so the target is read as written and in both decoded
+// forms, and a value holding several targets or a space (a srcset, a quoted
+// path) is read whole and field by field.
 func prMediaTargetKind(target string) string {
 	forms := []string{target}
 	decoded := html.UnescapeString(target)

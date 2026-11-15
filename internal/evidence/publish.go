@@ -20,7 +20,7 @@ const (
 	// fail the publish closed rather than push gigabytes into the repository.
 	maxFiles      = 500
 	maxTotalBytes = int64(256 << 20)
-	maxFileBytes  = int64(64 << 20)
+	MaxFileBytes  = int64(64 << 20)
 
 	// fetchRef is a scratch ref used to bring the remote evidence tip into the
 	// local object store. Only the resolved sha is used afterwards, so a
@@ -351,8 +351,8 @@ func collectFiles(root string, exclude []string) ([]collectedFile, error) {
 		if err != nil {
 			return nil
 		}
-		if info.Size() > maxFileBytes {
-			return fmt.Errorf("evidence file %s is %d bytes, over the %d byte limit", d.Name(), info.Size(), maxFileBytes)
+		if info.Size() > MaxFileBytes {
+			return fmt.Errorf("evidence file %s is %d bytes, over the %d byte limit", d.Name(), info.Size(), MaxFileBytes)
 		}
 		file, err := os.Open(p)
 		if err != nil {

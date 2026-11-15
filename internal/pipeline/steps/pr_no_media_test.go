@@ -454,6 +454,9 @@ func TestNeutralizePRMedia_BreaksLessCommonLinkForms(t *testing.T) {
 		{`<img src="data:image/png;base64,iVBORw0KGgoAAAA=">`, `<\img src="(image link removed)">`},
 		{`see data:image/png;base64,iVBORw0KGgoAAAA= now`, `see (image link removed) now`},
 		{`[clip](data:video/mp4;base64,AAAAIGZ0eXA=)`, `[clip]\((video link removed))`},
+		{`_www.example.com/shots/a.png_`, `_(image link removed)_`},
+		{`_https://example.com/a.png_`, `_(image link removed)_`},
+		{`[shot](shots/a(1).png)`, `[shot]\(shots/a(1).png)`},
 		// Ordinary links in the same forms.
 		{`see www.example.com/docs now`, `see www.example.com/docs now`},
 		{"[docs]: ./docs/guide.md\n\nSee [the guide][docs].", "[docs]: ./docs/guide.md\n\nSee [the guide][docs]."},
@@ -462,6 +465,8 @@ func TestNeutralizePRMedia_BreaksLessCommonLinkForms(t *testing.T) {
 		{`https://example.com/a&#46;txt`, `https://example.com/a&#46;txt`},
 		{`https://github.com/owner/repo/assets/readme`, `https://github.com/owner/repo/assets/readme`},
 		{`data:text/plain;base64,aGVsbG8=`, `data:text/plain;base64,aGVsbG8=`},
+		{`_www.example.com/docs_`, `_www.example.com/docs_`},
+		{`[notes](docs/a(1).txt)`, `[notes](docs/a(1).txt)`},
 	} {
 		got := neutralizePRMedia(tc.in)
 		if got != tc.want {
