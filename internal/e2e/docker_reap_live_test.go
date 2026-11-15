@@ -82,7 +82,7 @@ printf '%s\n' "$id" > ` + filepath.Join(out, "container") + `
 	for inspect("container", "inspect", containers[0]) == nil {
 		if time.Now().After(deadline) {
 			h.dumpDebugState()
-			t.Fatalf("run %s ended and its container %s is still there (%s)", run.ID, containers[0], runProgress(h.RunInfo(run.ID)))
+			t.Fatalf("run %s ended and its container %s is still there (%s)", run.ID, containers[0], h.runProgressByID(run.ID))
 		}
 		time.Sleep(300 * time.Millisecond)
 	}

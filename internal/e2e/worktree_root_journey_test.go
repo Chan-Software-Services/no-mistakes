@@ -169,7 +169,7 @@ func waitForRemoval(t *testing.T, h *Harness, runID, dir string, timeout time.Du
 		}
 		if time.Now().After(deadline) {
 			h.dumpDebugState()
-			t.Errorf("run worktree %q was still present %v after the run finished (%s)", dir, timeout, runProgress(h.RunInfo(runID)))
+			t.Errorf("run worktree %q was still present %v after the run finished (%s)", dir, timeout, h.runProgressByID(runID))
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
