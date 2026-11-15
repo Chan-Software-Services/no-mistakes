@@ -488,7 +488,7 @@ func waitForRunIDTerminal(t *testing.T, h *Harness, runID string, timeout time.D
 	if run == nil {
 		t.Fatalf("run %s disappeared", runID)
 	}
-	t.Fatalf("run %s did not finish in %v (status=%s)", runID, timeout, run.Status)
+	t.Fatalf("run %s did not finish in %v (%s)", runID, timeout, runProgress(run))
 	return nil
 }
 

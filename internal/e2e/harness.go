@@ -637,10 +637,39 @@ func (h *Harness) waitForRunStatus(branch string, timeout time.Duration, match f
 	}
 	h.dumpDebugState()
 	if lastRun != nil {
-		h.t.Fatalf("run for branch %s did not %s in %v (last status=%s)", branch, action, timeout, lastRun.Status)
+		h.t.Fatalf("run for branch %s did not %s in %v (%s)", branch, action, timeout, runProgress(lastRun))
 	}
 	h.t.Fatalf("no run found for branch %s within %v", branch, timeout)
 	return nil
+}
+
+// runProgress says where a run stopped, for a wait that timed out: the run's
+// status and the first step, in pipeline order, that has not finished.
+func runProgress(run *ipc.RunInfo) string {
+	if run == nil {
+		return "no run seen"
+	}
+	status := fmt.Sprintf("run status=%s", run.Status)
+	if run.Error != nil && *run.Error != "" {
+		status += fmt.Sprintf(" error=%q", *run.Error)
+	}
+	if len(run.Steps) == 0 {
+		return status + ", no steps recorded"
+	}
+	var stopped *ipc.StepResultInfo
+	for i := range run.Steps {
+		step := &run.Steps[i]
+		if step.Status == types.StepStatusCompleted || step.Status == types.StepStatusSkipped {
+			continue
+		}
+		if stopped == nil || step.StepOrder < stopped.StepOrder {
+			stopped = step
+		}
+	}
+	if stopped == nil {
+		return status + ", every step finished"
+	}
+	return fmt.Sprintf("%s, stopped at step %s status=%s", status, stopped.StepName, stopped.Status)
 }
 
 // dumpDebugState writes the daemon log, agent log, and per-step run
@@ -652,7 +681,7 @@ func (h *Harness) dumpDebugState() {
 		filepath.Join(h.NMHome, "daemon.log"),
 	} {
 		if data, err := os.ReadFile(candidate); err == nil && len(data) > 0 {
-			h.t.Logf("--- %s (last 8KB) ---\n%s", candidate, tailBytes(data, 8192))
+			h.t.Logf("--- %s (last 8KB, without the waits' own polls) ---\n%s", candidate, tailBytes(dropPollLines(data), 8192))
 		}
 	}
 	if data, err := os.ReadFile(h.AgentLog); err == nil {
@@ -668,6 +697,20 @@ func (h *Harness) dumpDebugState() {
 		}
 		return nil
 	})
+}
+
+// dropPollLines removes the daemon's DEBUG line for each get_runs and get_run
+// request. A wait polls several times a second, so those lines alone filled
+// the tail a timed-out wait dumps and pushed out what the daemon did.
+func dropPollLines(data []byte) []byte {
+	var out []byte
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		if bytes.Contains(line, []byte(`msg="ipc request" method=get_run`)) {
+			continue
+		}
+		out = append(out, line...)
+	}
+	return out
 }
 
 func tailBytes(data []byte, n int) []byte {
@@ -783,6 +826,7 @@ func (h *Harness) daemonStopDir() string {
 
 var (
 	buildOnce sync.Once
+	builtDir  string
 	builtNM   string
 	builtFake string
 	buildErr  error
@@ -790,7 +834,8 @@ var (
 
 // buildBinaries compiles the no-mistakes binary and the fakeagent binary
 // once per `go test` invocation. Both are placed in a per-process build
-// dir; subsequent harnesses reuse them.
+// dir; subsequent harnesses reuse them, and TestMain removes the dir with
+// removeBuiltBinaries once the package's tests have ended.
 func buildBinaries(t *testing.T) (nmBin, fakeBin string) {
 	t.Helper()
 	buildOnce.Do(func() {
@@ -799,6 +844,7 @@ func buildBinaries(t *testing.T) (nmBin, fakeBin string) {
 			buildErr = err
 			return
 		}
+		builtDir = dir
 		nm := filepath.Join(dir, executableName("no-mistakes"))
 		fake := filepath.Join(dir, executableName("fakeagent"))
 
@@ -828,6 +874,16 @@ func buildBinaries(t *testing.T) (nmBin, fakeBin string) {
 		t.Fatalf("build binaries: %v", buildErr)
 	}
 	return builtNM, builtFake
+}
+
+// removeBuiltBinaries deletes the build dir buildBinaries made, if any. Each
+// package run otherwise left its two binaries in the temp directory for good.
+func removeBuiltBinaries() {
+	if builtDir == "" {
+		return
+	}
+	_ = os.RemoveAll(builtDir)
+	builtDir = ""
 }
 
 func executableName(base string) string {

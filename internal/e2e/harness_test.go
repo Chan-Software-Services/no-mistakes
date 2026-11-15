@@ -167,3 +167,99 @@ func TestWaitForRunPrefersNewestRunOnBranch(t *testing.T) {
 		t.Fatalf("GetRuns calls = %d, want at least 2 polls", calls.Load())
 	}
 }
+
+// A wait that times out must say where the run stopped, so a hang is read
+// from the failure line and not dug out of the dumped logs.
+func TestRunProgressNamesTheStepTheRunStoppedAt(t *testing.T) {
+	step := func(order int, name types.StepName, status types.StepStatus) ipc.StepResultInfo {
+		return ipc.StepResultInfo{StepName: name, StepOrder: order, Status: status}
+	}
+	failure := "worktree add: exit status 128"
+	for _, tc := range []struct {
+		name string
+		run  *ipc.RunInfo
+		want string
+	}{
+		{
+			name: "a running step after finished ones, whatever the slice order",
+			run: &ipc.RunInfo{Status: types.RunRunning, Steps: []ipc.StepResultInfo{
+				step(3, types.StepDocument, types.StepStatusPending),
+				step(2, types.StepTest, types.StepStatusRunning),
+				step(0, types.StepRebase, types.StepStatusSkipped),
+				step(1, types.StepReview, types.StepStatusCompleted),
+			}},
+			want: "run status=running, stopped at step test status=running",
+		},
+		{
+			name: "a parked step",
+			run: &ipc.RunInfo{Status: types.RunRunning, Steps: []ipc.StepResultInfo{
+				step(0, types.StepReview, types.StepStatusAwaitingApproval),
+				step(1, types.StepTest, types.StepStatusPending),
+			}},
+			want: "run status=running, stopped at step review status=awaiting_approval",
+		},
+		{
+			name: "every step finished",
+			run: &ipc.RunInfo{Status: types.RunCompleted, Steps: []ipc.StepResultInfo{
+				step(0, types.StepReview, types.StepStatusCompleted),
+				step(1, types.StepTest, types.StepStatusSkipped),
+			}},
+			want: "run status=completed, every step finished",
+		},
+		{
+			name: "no steps recorded yet",
+			run:  &ipc.RunInfo{Status: types.RunPending},
+			want: "run status=pending, no steps recorded",
+		},
+		{
+			name: "a failed run carries its error",
+			run:  &ipc.RunInfo{Status: types.RunFailed, Error: &failure},
+			want: `run status=failed error="worktree add: exit status 128", no steps recorded`,
+		},
+		{name: "no run", run: nil, want: "no run seen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runProgress(tc.run); got != tc.want {
+				t.Fatalf("runProgress = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRemoveBuiltBinariesDeletesTheBuildDir(t *testing.T) {
+	saved := builtDir
+	t.Cleanup(func() { builtDir = saved })
+
+	dir := filepath.Join(t.TempDir(), "nm-e2e-bin-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "no-mistakes"), []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	builtDir = dir
+	removeBuiltBinaries()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("build dir still exists after removeBuiltBinaries: %v", err)
+	}
+	if builtDir != "" {
+		t.Fatalf("builtDir = %q after removal, want empty", builtDir)
+	}
+
+	// Nothing was built: nothing to remove, and nothing else is touched.
+	removeBuiltBinaries()
+}
+
+func TestDropPollLinesKeepsWhatTheDaemonDid(t *testing.T) {
+	log := "level=INFO msg=\"run started\" run=r1\n" +
+		"level=DEBUG msg=\"ipc request\" method=get_runs\n" +
+		"level=DEBUG msg=\"ipc request\" method=get_run\n" +
+		"level=INFO msg=\"ipc request\" method=respond\n" +
+		"level=WARN msg=\"run failed\" run=r1"
+	want := "level=INFO msg=\"run started\" run=r1\n" +
+		"level=INFO msg=\"ipc request\" method=respond\n" +
+		"level=WARN msg=\"run failed\" run=r1"
+	if got := string(dropPollLines([]byte(log))); got != want {
+		t.Fatalf("dropPollLines =\n%s\nwant\n%s", got, want)
+	}
+}

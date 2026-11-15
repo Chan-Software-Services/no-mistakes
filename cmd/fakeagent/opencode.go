@@ -163,15 +163,19 @@ func (s *fakeOpencodeServer) handleEvents(w http.ResponseWriter, r *http.Request
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	// Subscribe before the headers leave: the adapter posts its message as
+	// soon as it has them, and a turn that finished before a later subscribe
+	// broadcast its session.idle to nobody, so the adapter waited for it
+	// until the agent timeout.
+	ch := make(chan []byte, 32)
+	s.subscribe(ch)
+	defer s.unsubscribe(ch)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-
-	ch := make(chan []byte, 32)
-	s.subscribe(ch)
-	defer s.unsubscribe(ch)
 
 	ctx := r.Context()
 	for {
