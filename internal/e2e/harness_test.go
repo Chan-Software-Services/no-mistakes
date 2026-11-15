@@ -108,31 +108,20 @@ func TestDaemonStopDirFallsBackWhenWorkDirMoved(t *testing.T) {
 	}
 }
 
-func TestWaitForRunPrefersNewestRunOnBranch(t *testing.T) {
+// serveRuns stands a daemon socket up in a new NM_HOME whose GetRuns is
+// getRuns, and returns a harness that reads its runs from it.
+func serveRuns(t *testing.T, getRuns func() (ipc.GetRunsResult, error)) *Harness {
+	t.Helper()
 	nmHome, err := os.MkdirTemp("/tmp", "nm-e2e-")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(nmHome) })
-	workDir := t.TempDir()
 	p := paths.WithRoot(nmHome)
-	if err := os.MkdirAll(nmHome, 0o755); err != nil {
-		t.Fatalf("mkdir nm home: %v", err)
-	}
 
 	server := ipc.NewServer()
-	var calls atomic.Int32
 	server.Handle(ipc.MethodGetRuns, func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		if calls.Add(1) == 1 {
-			return ipc.GetRunsResult{Runs: []ipc.RunInfo{
-				{ID: "run-new", RepoID: "ignored", Branch: "feature/e2e", Status: types.RunRunning, CreatedAt: 20, UpdatedAt: 20},
-				{ID: "run-old", RepoID: "ignored", Branch: "feature/e2e", Status: types.RunCompleted, CreatedAt: 10, UpdatedAt: 10},
-			}}, nil
-		}
-		return ipc.GetRunsResult{Runs: []ipc.RunInfo{
-			{ID: "run-new", RepoID: "ignored", Branch: "feature/e2e", Status: types.RunCompleted, CreatedAt: 20, UpdatedAt: 30},
-			{ID: "run-old", RepoID: "ignored", Branch: "feature/e2e", Status: types.RunCompleted, CreatedAt: 10, UpdatedAt: 10},
-		}}, nil
+		return getRuns()
 	})
 
 	errCh := make(chan error, 1)
@@ -156,7 +145,24 @@ func TestWaitForRunPrefersNewestRunOnBranch(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	h := &Harness{t: t, NMHome: nmHome, WorkDir: workDir}
+	return &Harness{t: t, NMHome: nmHome, WorkDir: t.TempDir()}
+}
+
+func TestWaitForRunPrefersNewestRunOnBranch(t *testing.T) {
+	var calls atomic.Int32
+	h := serveRuns(t, func() (ipc.GetRunsResult, error) {
+		if calls.Add(1) == 1 {
+			return ipc.GetRunsResult{Runs: []ipc.RunInfo{
+				{ID: "run-new", RepoID: "ignored", Branch: "feature/e2e", Status: types.RunRunning, CreatedAt: 20, UpdatedAt: 20},
+				{ID: "run-old", RepoID: "ignored", Branch: "feature/e2e", Status: types.RunCompleted, CreatedAt: 10, UpdatedAt: 10},
+			}}, nil
+		}
+		return ipc.GetRunsResult{Runs: []ipc.RunInfo{
+			{ID: "run-new", RepoID: "ignored", Branch: "feature/e2e", Status: types.RunCompleted, CreatedAt: 20, UpdatedAt: 30},
+			{ID: "run-old", RepoID: "ignored", Branch: "feature/e2e", Status: types.RunCompleted, CreatedAt: 10, UpdatedAt: 10},
+		}}, nil
+	})
+
 	run := h.WaitForRun("feature/e2e", 2*time.Second)
 	if run.ID != "run-new" {
 		t.Fatalf("WaitForRun returned %q, want newest run", run.ID)
@@ -463,5 +469,70 @@ func TestPolledRunProgressKeepsTheLastRunSeenBesideThePollError(t *testing.T) {
 	}
 	if got, want := polledRunProgress(nil, pollErr), "no run seen; runs lookup failed: dial daemon: connection refused"; got != want {
 		t.Errorf("polledRunProgress(nil, err) = %q, want %q", got, want)
+	}
+}
+
+func runTerminal(status types.RunStatus) bool { return status.Terminal() }
+
+// With the daemon unreachable for the whole wait, the wait's message must say
+// the polls failed: a bare "no run found" reads as a run that never started.
+func TestPollRunStatusSaysThePollsFailedWhenTheDaemonIsUnreachable(t *testing.T) {
+	h := &Harness{t: t, NMHome: t.TempDir(), WorkDir: t.TempDir()}
+
+	run, err := h.pollRunStatus("feature/e2e", 50*time.Millisecond, runTerminal, "finish")
+	if run != nil || err == nil {
+		t.Fatalf("pollRunStatus() = %v, %v, want a timeout error", run, err)
+	}
+	want := "no run found for branch feature/e2e within 50ms (no run seen; runs lookup failed: dial daemon: "
+	if !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("pollRunStatus() error = %q, want prefix %q", err, want)
+	}
+}
+
+// A daemon that stops answering mid-wait must not erase the run an earlier
+// poll saw: the message keeps it beside the last poll's error.
+func TestPollRunStatusKeepsTheLastRunSeenWhenLaterPollsFail(t *testing.T) {
+	var calls atomic.Int32
+	h := serveRuns(t, func() (ipc.GetRunsResult, error) {
+		if calls.Add(1) == 1 {
+			return ipc.GetRunsResult{Runs: []ipc.RunInfo{
+				{ID: "run-1", Branch: "feature/e2e", Status: types.RunRunning},
+			}}, nil
+		}
+		return ipc.GetRunsResult{}, errors.New("daemon busy")
+	})
+
+	run, err := h.pollRunStatus("feature/e2e", 500*time.Millisecond, runTerminal, "finish")
+	if run != nil || err == nil {
+		t.Fatalf("pollRunStatus() = %v, %v, want a timeout error", run, err)
+	}
+	want := "run for branch feature/e2e did not finish in 500ms (run status=running, no steps recorded; runs lookup failed: get runs: "
+	if !strings.HasPrefix(err.Error(), want) || !strings.Contains(err.Error(), "daemon busy") {
+		t.Fatalf("pollRunStatus() error = %q, want prefix %q and the call's error", err, want)
+	}
+	if calls.Load() < 2 {
+		t.Fatalf("GetRuns calls = %d, want a failed poll after the first", calls.Load())
+	}
+}
+
+// A failed poll is polled again, so a matching run is returned by the next
+// poll that answers rather than hidden by the failure.
+func TestPollRunStatusReturnsAMatchingRunAfterAFailedPoll(t *testing.T) {
+	var calls atomic.Int32
+	h := serveRuns(t, func() (ipc.GetRunsResult, error) {
+		if calls.Add(1) == 1 {
+			return ipc.GetRunsResult{}, errors.New("daemon busy")
+		}
+		return ipc.GetRunsResult{Runs: []ipc.RunInfo{
+			{ID: "run-1", Branch: "feature/e2e", Status: types.RunCompleted},
+		}}, nil
+	})
+
+	run, err := h.pollRunStatus("feature/e2e", 5*time.Second, runTerminal, "finish")
+	if err != nil {
+		t.Fatalf("pollRunStatus() error = %v, want the completed run", err)
+	}
+	if run.ID != "run-1" || run.Status != types.RunCompleted {
+		t.Fatalf("pollRunStatus() = %s status=%s, want run-1 completed", run.ID, run.Status)
 	}
 }
