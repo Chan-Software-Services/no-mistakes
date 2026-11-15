@@ -449,8 +449,8 @@ func TestRunsReturnsAnUnreachableDaemonAsAnError(t *testing.T) {
 	}
 }
 
-// A failed last poll is reported beside the newest run an earlier poll saw,
-// never in its place.
+// A failed last lookup is reported beside the newest run an earlier lookup
+// saw, never in its place.
 func TestPolledRunProgressKeepsTheLastRunSeenBesideThePollError(t *testing.T) {
 	run := &ipc.RunInfo{Status: types.RunCompleted}
 	pollErr := errors.New("dial daemon: connection refused")
@@ -458,10 +458,10 @@ func TestPolledRunProgressKeepsTheLastRunSeenBesideThePollError(t *testing.T) {
 	if got, want := polledRunProgress(run, nil), runProgress(run); got != want {
 		t.Errorf("polledRunProgress(run, nil) = %q, want %q", got, want)
 	}
-	if got, want := polledRunProgress(run, pollErr), runProgress(run)+"; last poll failed: dial daemon: connection refused"; got != want {
+	if got, want := polledRunProgress(run, pollErr), runProgress(run)+"; runs lookup failed: dial daemon: connection refused"; got != want {
 		t.Errorf("polledRunProgress(run, err) = %q, want %q", got, want)
 	}
-	if got, want := polledRunProgress(nil, pollErr), "no run seen; last poll failed: dial daemon: connection refused"; got != want {
+	if got, want := polledRunProgress(nil, pollErr), "no run seen; runs lookup failed: dial daemon: connection refused"; got != want {
 		t.Errorf("polledRunProgress(nil, err) = %q, want %q", got, want)
 	}
 }

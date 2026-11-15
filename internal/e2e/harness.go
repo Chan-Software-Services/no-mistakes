@@ -711,14 +711,15 @@ func (h *Harness) runProgressByID(runID string) string {
 	return runProgress(run)
 }
 
-// polledRunProgress is runProgress for a wait that polls with h.runs: lastRun
-// is the newest run any poll saw, and a non-nil pollErr, the error of the last
-// poll, is reported beside it, since the run may have moved on unseen.
-func polledRunProgress(lastRun *ipc.RunInfo, pollErr error) string {
-	if pollErr == nil {
+// polledRunProgress is runProgress for a wait that reads the runs with h.runs,
+// whether it polls them or looks them up once at its timeout: lastRun is the
+// newest run a lookup saw, and a non-nil lookupErr, the error of the last
+// lookup, is reported beside it, since the run may have moved on unseen.
+func polledRunProgress(lastRun *ipc.RunInfo, lookupErr error) string {
+	if lookupErr == nil {
 		return runProgress(lastRun)
 	}
-	return fmt.Sprintf("%s; last poll failed: %v", runProgress(lastRun), pollErr)
+	return fmt.Sprintf("%s; runs lookup failed: %v", runProgress(lastRun), lookupErr)
 }
 
 // dumpDebugState writes the daemon log, agent log, and per-step run
