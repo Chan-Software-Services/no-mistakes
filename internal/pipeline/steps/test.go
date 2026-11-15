@@ -174,6 +174,11 @@ Previous test findings to address:
 	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create test evidence dir: %w", err)
 	}
+	scratchDir := testScratchDir(sctx)
+	runToken := testRunToken(sctx)
+	if err := os.MkdirAll(scratchDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create test scratch dir: %w", err)
+	}
 	if testCmd == "" {
 		sctx.Log("no test command configured, asking agent to run tests...")
 	} else if baselineExitCode != 0 {
@@ -220,6 +225,9 @@ Drive each scenario:
 - Stand the product up the way an end user runs it, in an isolated environment, and drive each scenario end-to-end against that running product.
 - Getting every scenario live is your responsibility. When a scenario needs something that is not already provided - an environment, an instance, an account, records, a data set, an endpoint - find a workaround: build a disposable one yourself (throwaway fixtures, data, configuration, or a local instance), point the real product at it through whatever isolation the product supports (a separate root, home, or data directory, a temporary config, a local port, a sandbox or test mode), and drive the scenario there. A missing environment is a problem to solve, not a reason to skip the scenario. A scenario driven by the real product against a disposable setup you built is live; a fixture that stands in for the product itself is not.
 - Everything you build must stay disposable and isolated: never read or write the operator's real data, real configuration, or shared services, and tear it down before finishing unless it is evidence.
+- Write every scratch file this testing needs (driver scripts, throwaway fixtures, configs, data directories, logs) into this run's own scratch directory, never into the worktree or a fixed path such as /tmp/<name> that another run could share: %s
+- Give every disposable resource you start (a container, a compose project, a database) a name that carries this run's token, %s (for example demo-%s), and start every server on a free port chosen when it starts, never a fixed one, so a run beside it never shares or collides with it.
+- Never name the scratch directory, its files, this run's token, this run's ID or its Docker label, or those resource names in scenario evidence, artifacts, the "tested" array, or the testing summary: a pull request reader cannot see them. In "tested", record such a check in words, or as its command with the scratch path, the token, the run ID and its Docker label, and the resource names left out.
 %s
 - When a live scenario drives a TUI through a pseudo-terminal, give the pty a non-zero window size (TIOCSWINSZ) before the TUI reads its grid, and drain the master. A 0x0 grid makes the TUI exit immediately with a symptom such as "terminal reported a zero-sized grid" and never register, so a live UI check silently becomes a fake. Bare script(1) and pty.fork() from a non-tty parent typically yield that 0x0 grid.
 - Mark a scenario "live": true ONLY when you drove it against the real product in this run. A unit test, a stub, a mock, a recorded fixture, or reading the code is NOT live.
@@ -269,6 +277,9 @@ Rules:
 		sctx.Run.HeadSHA,
 		configuredTestCommand,
 		trustedRunbook,
+		scratchDir,
+		runToken,
+		runToken,
 		testServiceGuidance(sctx.Run.ID),
 		evidenceGuidance,
 		fallbackGuidance,

@@ -820,10 +820,23 @@ func artifactFilesystemPath(p string, opts testingSummaryOptions) string {
 	if opts.evidenceRoot == "" {
 		return ""
 	}
-	if _, ok := artifactPathRelativeToRoot(p, opts.evidenceRoot); !ok {
+	if _, ok := artifactPathRelativeToRoot(p, opts.evidenceRoot); !ok || isTestScratchPath(p, opts) {
 		return ""
 	}
 	return p
+}
+
+// isTestScratchPath reports whether p is inside the Test step's scratch
+// directory (evidence.ScratchDirName) in the run's evidence directory. Its
+// files are never evidence: they hold the run's driver scripts and resource
+// names, so the PR body neither embeds nor names them, as publication never
+// copies them (ExcludeDirs).
+func isTestScratchPath(p string, opts testingSummaryOptions) bool {
+	if opts.evidenceRoot == "" {
+		return false
+	}
+	rel, ok := artifactPathRelativeToRoot(p, opts.evidenceRoot)
+	return ok && strings.SplitN(filepath.ToSlash(rel), "/", 2)[0] == evidence.ScratchDirName
 }
 
 func readEmbeddedArtifactText(fsPath string) (string, error) {
@@ -958,7 +971,7 @@ func localArtifactPath(target string, opts testingSummaryOptions) string {
 	if target == "" || !filepath.IsAbs(target) {
 		return ""
 	}
-	if _, ok := artifactPathRelativeToRoot(target, opts.repoRoot); ok {
+	if _, ok := artifactPathRelativeToRoot(target, opts.repoRoot); ok || isTestScratchPath(target, opts) {
 		return ""
 	}
 	return target

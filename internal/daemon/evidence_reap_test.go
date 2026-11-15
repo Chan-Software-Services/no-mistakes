@@ -10,6 +10,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/evidence"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -394,5 +395,38 @@ func TestRecoveredRunCleanupRemovesItsEmptyEvidenceDir(t *testing.T) {
 
 	if f.exists(runID) {
 		t.Error("a resumed run left its empty evidence directory behind")
+	}
+}
+
+// TestRunCleanupRemovesAnEmptyTestScratchDirectory keeps the litter fix whole
+// now that the test step creates its scratch directory inside the run's
+// evidence directory before the agent decides whether it needs one: an empty
+// scratch directory alone must not keep the run's directory alive, while one
+// that holds files is kept for the reaper like any other content.
+func TestRunCleanupRemovesAnEmptyTestScratchDirectory(t *testing.T) {
+	f := newEvidenceFixture(t)
+	m := NewRunManager(f.db, f.p, nil)
+
+	emptyRun := f.seed("empty-scratch", types.RunCompleted, time.Minute, nil)
+	usedRun := f.seed("used-scratch", types.RunCompleted, time.Minute, nil)
+	if err := os.MkdirAll(filepath.Join(f.root, emptyRun, evidence.ScratchDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(f.root, usedRun, evidence.ScratchDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.root, usedRun, evidence.ScratchDirName, "driver.py"), []byte("print(1)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{})
+	m.cleanupRunEvidence(cfg, emptyRun)
+	m.cleanupRunEvidence(cfg, usedRun)
+
+	if f.exists(emptyRun) {
+		t.Error("an empty test scratch directory kept a finished run's evidence directory alive")
+	}
+	if _, err := os.Stat(filepath.Join(f.root, usedRun, evidence.ScratchDirName, "driver.py")); err != nil {
+		t.Errorf("a scratch directory that holds files was removed at cleanup: %v", err)
 	}
 }
