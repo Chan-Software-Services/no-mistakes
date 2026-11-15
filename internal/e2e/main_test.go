@@ -10,7 +10,9 @@ import (
 )
 
 // TestMain recovers any stale temporary-daemon inventory left by a prior
-// interrupted suite, runs the package tests, then reaps again on exit.
+// interrupted suite, runs the package tests, then reaps again on exit. Both
+// reaps leave the daemons another live test process owns, since two runs of
+// this package without the suite wrapper share one inventory.
 //
 // This is the in-process recovery boundary. It does not survive SIGKILL of
 // the test process; scripts/e2e.sh EXIT/INT/TERM trap covers that case for
@@ -18,11 +20,11 @@ import (
 // wrapper itself via the on-disk inventory.
 func TestMain(m *testing.M) {
 	if inv, err := e2edaemon.Open(); err == nil {
-		_ = inv.ReapAll()
+		_ = inv.ReapOrphaned()
 	}
 	code := m.Run()
 	if inv, err := e2edaemon.Open(); err == nil {
-		_ = inv.ReapAll()
+		_ = inv.ReapOrphaned()
 	}
 	removeBuiltBinaries()
 	os.Exit(code)
