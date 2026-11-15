@@ -507,17 +507,27 @@ func (h *Harness) WaitForRunRunning(branch string, timeout time.Duration) *ipc.R
 
 func (h *Harness) Runs() []ipc.RunInfo {
 	h.t.Helper()
+	runs, err := h.runs()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return runs
+}
+
+// runs is Runs for a wait that polls: it returns a failed call's error rather
+// than failing the test, which would replace the wait's own message.
+func (h *Harness) runs() ([]ipc.RunInfo, error) {
 	p := paths.WithRoot(h.NMHome)
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
-		h.t.Fatalf("dial daemon: %v", err)
+		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
 	defer client.Close()
 	var result ipc.GetRunsResult
 	if err := client.Call(ipc.MethodGetRuns, &ipc.GetRunsParams{RepoID: h.repoID()}, &result); err != nil {
-		h.t.Fatalf("get runs: %v", err)
+		return nil, fmt.Errorf("get runs: %w", err)
 	}
-	return result.Runs
+	return result.Runs, nil
 }
 
 func (h *Harness) RunInfo(runID string) *ipc.RunInfo {
@@ -699,6 +709,16 @@ func (h *Harness) runProgressByID(runID string) string {
 		return fmt.Sprintf("run not readable: %v", err)
 	}
 	return runProgress(run)
+}
+
+// polledRunProgress is runProgress for a wait that polls with h.runs: lastRun
+// is the newest run any poll saw, and a non-nil pollErr, the error of the last
+// poll, is reported beside it, since the run may have moved on unseen.
+func polledRunProgress(lastRun *ipc.RunInfo, pollErr error) string {
+	if pollErr == nil {
+		return runProgress(lastRun)
+	}
+	return fmt.Sprintf("%s; last poll failed: %v", runProgress(lastRun), pollErr)
 }
 
 // dumpDebugState writes the daemon log, agent log, and per-step run

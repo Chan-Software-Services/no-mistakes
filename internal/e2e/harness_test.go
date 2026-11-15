@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -434,5 +435,33 @@ func TestRunProgressByIDReportsAnUnreachableDaemon(t *testing.T) {
 	got := h.runProgressByID("run-1")
 	if !strings.HasPrefix(got, "run not readable: dial daemon: ") {
 		t.Fatalf("runProgressByID() = %q, want the dial error in place of the run's progress", got)
+	}
+}
+
+// A wait that polls with runs must get the unreachable daemon back as an
+// error, so the poll can go on to the wait's own message.
+func TestRunsReturnsAnUnreachableDaemonAsAnError(t *testing.T) {
+	h := &Harness{t: t, NMHome: t.TempDir()}
+
+	runs, err := h.runs()
+	if err == nil || !strings.HasPrefix(err.Error(), "dial daemon: ") {
+		t.Fatalf("runs() = %v, %v, want a dial error", runs, err)
+	}
+}
+
+// A failed last poll is reported beside the newest run an earlier poll saw,
+// never in its place.
+func TestPolledRunProgressKeepsTheLastRunSeenBesideThePollError(t *testing.T) {
+	run := &ipc.RunInfo{Status: types.RunCompleted}
+	pollErr := errors.New("dial daemon: connection refused")
+
+	if got, want := polledRunProgress(run, nil), runProgress(run); got != want {
+		t.Errorf("polledRunProgress(run, nil) = %q, want %q", got, want)
+	}
+	if got, want := polledRunProgress(run, pollErr), runProgress(run)+"; last poll failed: dial daemon: connection refused"; got != want {
+		t.Errorf("polledRunProgress(run, err) = %q, want %q", got, want)
+	}
+	if got, want := polledRunProgress(nil, pollErr), "no run seen; last poll failed: dial daemon: connection refused"; got != want {
+		t.Errorf("polledRunProgress(nil, err) = %q, want %q", got, want)
 	}
 }
