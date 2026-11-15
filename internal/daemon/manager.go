@@ -19,6 +19,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/custody"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/eval"
+	"github.com/kunchenguid/no-mistakes/internal/evidence"
 	"github.com/kunchenguid/no-mistakes/internal/forgecontext"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -619,6 +620,11 @@ func (m *RunManager) cleanupRunEvidence(cfg *config.Config, runID string) {
 		}
 	}
 	root := m.paths.EvidenceRoot(configured)
+	// The test step creates its scratch directory up front too; an empty one
+	// goes first so it cannot keep an otherwise empty run directory alive.
+	if err := os.Remove(filepath.Join(root, runID, evidence.ScratchDirName)); err != nil && !os.IsNotExist(err) {
+		slog.Debug("run test scratch kept", "run_id", runID, "reason", err)
+	}
 	if err := os.Remove(filepath.Join(root, runID)); err != nil && !os.IsNotExist(err) {
 		slog.Debug("run evidence kept", "run_id", runID, "reason", err)
 	}

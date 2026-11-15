@@ -200,3 +200,16 @@ func TestWorktreeSteering_BoundsHostFilesystemSearch(t *testing.T) {
 		t.Errorf("steering preamble dropped the out-of-worktree read allowance:\n%s", preamble)
 	}
 }
+
+// TestSteeringAllowsTheTestScratchDirectory keeps the preamble in step with the
+// Test prompt, which names a per-run scratch directory inside the run's
+// evidence directory for driver scripts and throwaway data. A preamble that
+// allowed only evidence there would push those files back to a fixed path in
+// the shared temp directory, which another run could share.
+func TestSteeringAllowsTheTestScratchDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "evidence")
+	want := "The only allowed out-of-worktree writes are test evidence and test scratch files under " + root + " when a testing prompt explicitly asks for them."
+	if got := WorktreeSteering(root); !strings.Contains(got, want) {
+		t.Fatalf("steering preamble does not allow test scratch files:\n%s", got)
+	}
+}
