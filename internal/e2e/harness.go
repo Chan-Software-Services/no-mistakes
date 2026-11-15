@@ -48,6 +48,10 @@ type Harness struct {
 	globalConfigExtra string                 // mirrors SetupOpts.GlobalConfigExtra
 	autoFix           map[types.StepName]int // mirrors SetupOpts.AutoFix
 	daemonOwn         *e2edaemon.Ownership
+
+	diskFullMu     sync.Mutex
+	diskFullSource string // the command that first printed a full-disk sign
+	diskFullSign   string // that sign's line; see noteDiskFull
 }
 
 // SetupOpts controls per-test setup.
@@ -126,6 +130,10 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 		globalConfigExtra: opts.GlobalConfigExtra,
 		autoFix:           opts.AutoFix,
 	}
+	// Registered before anything below can fail, and so run after every
+	// later cleanup: a full disk that fails this setup, or a failure the
+	// daemon-exit check adds, still gets the report.
+	t.Cleanup(h.reportDiskFull)
 
 	for _, dir := range []string{h.BinDir, h.NMHome, h.HomeDir, h.WorkDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -196,6 +204,7 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	}
 	h.daemonOwn = own
 
+	t.Cleanup(h.checkLaunchedDaemonsExited)
 	t.Cleanup(h.shutdown)
 	return h
 }
@@ -320,6 +329,7 @@ func (h *Harness) RunInDirWithEnv(dir string, env map[string]string, args ...str
 	cmd.Env = mergedEnv(os.Environ(), env)
 	out, err := cmd.CombinedOutput()
 	h.syncDaemonOwnership()
+	h.noteDiskFull("no-mistakes "+strings.Join(args, " "), string(out))
 	return string(out), err
 }
 
@@ -788,7 +798,9 @@ func (h *Harness) runGit(ctx context.Context, dir string, args ...string) ([]byt
 		"GIT_COMMITTER_NAME=E2E Test",
 		"GIT_COMMITTER_EMAIL=e2e@example.com",
 	)
-	return cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	h.noteDiskFull("git "+strings.Join(args, " "), string(out))
+	return out, err
 }
 
 // repoID mirrors gate.repoID(): sha256 of the absolute work path, first

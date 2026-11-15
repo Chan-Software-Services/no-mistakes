@@ -509,3 +509,74 @@ func mustUserHome(t *testing.T) string {
 	}
 	return h
 }
+
+func TestReapOrphaned_LeavesAnotherLiveOwnersEntry(t *testing.T) {
+	lab := labRoot(t)
+	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
+	inv, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A process that ran and was waited for: its pid is no live owner.
+	gone := exec.Command(os.Args[0], "-test.run=^$")
+	if err := gone.Run(); err != nil {
+		t.Fatalf("run exited helper: %v", err)
+	}
+
+	homes := map[string]int{
+		"other-live": os.Getppid(), // another copy of the suite, still running
+		"mine":       os.Getpid(),
+		"owner-gone": gone.Process.Pid,
+		"no-owner":   0,
+	}
+	for id, owner := range homes {
+		nmHome := filepath.Join(lab, "nm-e2e-"+id, "nmhome")
+		if err := os.MkdirAll(nmHome, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := inv.Register(id, nmHome, "", 0, owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A live pid that is no longer the process that registered: the system
+	// gave a dead owner's pid to something else.
+	reusedHome := filepath.Join(lab, "nm-e2e-pid-reused", "nmhome")
+	if err := os.MkdirAll(reusedHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.Register("pid-reused", reusedHome, "", 0, os.Getppid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.withLock(func(file *inventoryFile) error {
+		for i := range file.Entries {
+			switch file.Entries[i].ID {
+			case "other-live":
+				if file.Entries[i].OwnerHash == "" {
+					t.Fatalf("Register recorded no owner hash for a live owner")
+				}
+			case "pid-reused":
+				file.Entries[i].OwnerHash = processHash("the test process that died")
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := inv.ReapOrphaned()
+	if len(result.Errors) > 0 {
+		t.Fatalf("reap errors: %v", result.Errors)
+	}
+	if result.Entries != 4 {
+		t.Fatalf("reaped %d entries, want the 4 no live owner but this process holds", result.Entries)
+	}
+	list, err := inv.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != "other-live" {
+		t.Fatalf("inventory after reap = %+v, want only the other live owner's entry", list)
+	}
+}

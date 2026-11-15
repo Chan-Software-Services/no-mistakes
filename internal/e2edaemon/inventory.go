@@ -30,12 +30,16 @@ const (
 
 // Entry is one owned temporary E2E daemon root.
 type Entry struct {
-	ID           string    `json:"id"`
-	NMHome       string    `json:"nm_home"`
-	PID          int       `json:"pid"`
-	NMBin        string    `json:"nm_bin,omitempty"`
-	ProcessHash  string    `json:"process_hash,omitempty"`
-	OwnerPID     int       `json:"owner_pid"`
+	ID          string `json:"id"`
+	NMHome      string `json:"nm_home"`
+	PID         int    `json:"pid"`
+	NMBin       string `json:"nm_bin,omitempty"`
+	ProcessHash string `json:"process_hash,omitempty"`
+	OwnerPID    int    `json:"owner_pid"`
+	// OwnerHash is the hash of the owner's command line when it registered,
+	// so a pid the system later gave to another process is not read as the
+	// owner. Empty when it could not be read, and in older entries.
+	OwnerHash    string    `json:"owner_hash,omitempty"`
 	RegisteredAt time.Time `json:"registered_at"`
 }
 
@@ -113,6 +117,12 @@ func (inv *Inventory) Register(id, nmHome, nmBin string, pid, ownerPID int) erro
 	if id == "" {
 		return fmt.Errorf("e2edaemon: empty entry id")
 	}
+	ownerHash := ""
+	if ownerPID > 0 {
+		if command, err := processCommandLine(ownerPID); err == nil && command != "" {
+			ownerHash = processHash(command)
+		}
+	}
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	return inv.withLock(func(file *inventoryFile) error {
@@ -129,6 +139,7 @@ func (inv *Inventory) Register(id, nmHome, nmBin string, pid, ownerPID int) erro
 				}
 				if ownerPID > 0 {
 					file.Entries[i].OwnerPID = ownerPID
+					file.Entries[i].OwnerHash = ownerHash
 				}
 				if file.Entries[i].RegisteredAt.IsZero() {
 					file.Entries[i].RegisteredAt = now
@@ -142,6 +153,7 @@ func (inv *Inventory) Register(id, nmHome, nmBin string, pid, ownerPID int) erro
 			PID:          pid,
 			NMBin:        nmBin,
 			OwnerPID:     ownerPID,
+			OwnerHash:    ownerHash,
 			RegisteredAt: now,
 		})
 		return nil
