@@ -24,5 +24,6 @@ func TestMain(m *testing.M) {
 	if inv, err := e2edaemon.Open(); err == nil {
 		_ = inv.ReapAll()
 	}
+	removeBuiltBinaries()
 	os.Exit(code)
 }

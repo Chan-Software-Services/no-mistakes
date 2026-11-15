@@ -808,6 +808,7 @@ func (h *Harness) daemonStopDir() string {
 
 var (
 	buildOnce sync.Once
+	builtDir  string
 	builtNM   string
 	builtFake string
 	buildErr  error
@@ -815,7 +816,8 @@ var (
 
 // buildBinaries compiles the no-mistakes binary and the fakeagent binary
 // once per `go test` invocation. Both are placed in a per-process build
-// dir; subsequent harnesses reuse them.
+// dir; subsequent harnesses reuse them, and TestMain removes the dir with
+// removeBuiltBinaries once the package's tests have ended.
 func buildBinaries(t *testing.T) (nmBin, fakeBin string) {
 	t.Helper()
 	buildOnce.Do(func() {
@@ -824,6 +826,7 @@ func buildBinaries(t *testing.T) (nmBin, fakeBin string) {
 			buildErr = err
 			return
 		}
+		builtDir = dir
 		nm := filepath.Join(dir, executableName("no-mistakes"))
 		fake := filepath.Join(dir, executableName("fakeagent"))
 
@@ -853,6 +856,16 @@ func buildBinaries(t *testing.T) (nmBin, fakeBin string) {
 		t.Fatalf("build binaries: %v", buildErr)
 	}
 	return builtNM, builtFake
+}
+
+// removeBuiltBinaries deletes the build dir buildBinaries made, if any. Each
+// package run otherwise left its two binaries in the temp directory for good.
+func removeBuiltBinaries() {
+	if builtDir == "" {
+		return
+	}
+	_ = os.RemoveAll(builtDir)
+	builtDir = ""
 }
 
 func executableName(base string) string {

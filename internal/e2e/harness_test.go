@@ -219,3 +219,27 @@ func TestRunProgressNamesTheStepTheRunStoppedAt(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveBuiltBinariesDeletesTheBuildDir(t *testing.T) {
+	saved := builtDir
+	t.Cleanup(func() { builtDir = saved })
+
+	dir := filepath.Join(t.TempDir(), "nm-e2e-bin-test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "no-mistakes"), []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	builtDir = dir
+	removeBuiltBinaries()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("build dir still exists after removeBuiltBinaries: %v", err)
+	}
+	if builtDir != "" {
+		t.Fatalf("builtDir = %q after removal, want empty", builtDir)
+	}
+
+	// Nothing was built: nothing to remove, and nothing else is touched.
+	removeBuiltBinaries()
+}
