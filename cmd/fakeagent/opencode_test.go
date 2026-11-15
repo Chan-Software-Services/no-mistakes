@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestFakeOpencodeServerUnsubscribeLeavesCopiedSubscriberSafe(t *testing.T) {
@@ -495,4 +498,50 @@ func postFakeOpencode(t *testing.T, srv *fakeOpencodeServer, path, body string) 
 		t.Fatalf("POST %s status = %d: %s", path, rec.Code, rec.Body.String())
 	}
 	return rec.Body.Bytes()
+}
+
+// firstFlushRecorder is a streaming ResponseWriter that reports how many
+// event subscribers the server has at the moment the response headers leave.
+type firstFlushRecorder struct {
+	*httptest.ResponseRecorder
+	srv          *fakeOpencodeServer
+	once         sync.Once
+	atFirstFlush chan int
+}
+
+func (r *firstFlushRecorder) Flush() {
+	r.once.Do(func() {
+		r.srv.mu.Lock()
+		n := len(r.srv.subscribers)
+		r.srv.mu.Unlock()
+		r.atFirstFlush <- n
+	})
+}
+
+// The adapter posts its message as soon as the event stream's headers arrive,
+// so the stream must already be subscribed by then: a turn that finished
+// between the headers and a later subscribe broadcast its session.idle to
+// nobody and the adapter waited for it until the agent timeout, which on a
+// loaded machine failed e2e runs at their fixed waits.
+func TestFakeOpencodeServerSubscribesBeforeTheEventStreamHeadersLeave(t *testing.T) {
+	srv := &fakeOpencodeServer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := &firstFlushRecorder{ResponseRecorder: httptest.NewRecorder(), srv: srv, atFirstFlush: make(chan int, 1)}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleEvents(rec, httptest.NewRequest(http.MethodGet, "/global/event", nil).WithContext(ctx))
+	}()
+
+	select {
+	case n := <-rec.atFirstFlush:
+		if n != 1 {
+			t.Fatalf("subscribers when the event stream's headers left = %d, want 1", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("event stream never flushed its headers")
+	}
+	cancel()
+	<-done
 }
