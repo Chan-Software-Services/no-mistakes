@@ -30,9 +30,9 @@ type evidenceLinks struct {
 // orphan evidence branch and returns the links the PR body should use. It
 // returns nil whenever evidence is not opted in, there is nothing to publish,
 // or publication failed. The renderer then omits evidence-branch links that
-// would not resolve, and the artifact keeps its local-path rendering. Image and
-// video files are never published (internal/evidence skips them), so no image
-// or video is ever linked.
+// would not resolve, and the artifact is named by its label as kept with the
+// run. Only text evidence is published (evidence.IsPublishableText), so no
+// image or video is ever linked.
 func publishRunEvidence(sctx *pipeline.StepContext) *evidenceLinks {
 	if sctx == nil || sctx.Config == nil || sctx.Repo == nil || sctx.Run == nil || !sctx.Config.Test.Evidence.StoreInRepo {
 		return nil
