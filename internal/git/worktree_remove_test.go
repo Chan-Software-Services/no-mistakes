@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -76,11 +77,25 @@ func TestWorktreeRemoveDeletesTheDirectoryAndUnlistsTheWorktree(t *testing.T) {
 	}
 }
 
+// adminEntryNames returns the sorted names in a worktree's admin directory.
+func adminEntryNames(t *testing.T, admin string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
 // A git process that enumerated the gate's worktrees just before the removal
 // goes on to read worktrees/<id>/commondir, and dies with "failed to read
 // worktrees/<id>/commondir" when the file vanished after it checked that it
-// exists. The removal therefore leaves commondir (and HEAD) in place for such a
-// reader and only unlists the entry.
+// exists. The removal therefore leaves commondir in place for such a reader
+// and only unlists the entry.
 func TestWorktreeRemoveKeepsWhatAReaderAlreadyListingTheWorktreeStillReads(t *testing.T) {
 	f := newWorktreeRemoveFixture(t)
 	gitdirContent, err := os.ReadFile(filepath.Join(f.admin, "gitdir"))
@@ -92,24 +107,8 @@ func TestWorktreeRemoveKeepsWhatAReaderAlreadyListingTheWorktreeStillReads(t *te
 		t.Fatalf("WorktreeRemove: %v", err)
 	}
 
-	if _, err := os.Lstat(filepath.Join(f.admin, "gitdir")); !os.IsNotExist(err) {
-		t.Fatalf("admin gitdir file should be gone so git stops listing the worktree (lstat error %v)", err)
-	}
-	for _, name := range []string{"commondir", "HEAD"} {
-		if _, err := os.ReadFile(filepath.Join(f.admin, name)); err != nil {
-			t.Fatalf("admin %s must stay readable for a reader that already listed the worktree: %v", name, err)
-		}
-	}
-	entries, err := os.ReadDir(f.admin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 2 {
-		var names []string
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-		t.Fatalf("removed worktree's admin directory holds %v, want only commondir and HEAD", names)
+	if names := adminEntryNames(t, f.admin); !slices.Equal(names, []string{"commondir", "locked"}) {
+		t.Fatalf("removed worktree's admin directory holds %v, want only commondir and locked", names)
 	}
 
 	// Put back the one file such a reader had already read: git must then get
@@ -125,6 +124,31 @@ func TestWorktreeRemoveKeepsWhatAReaderAlreadyListingTheWorktreeStillReads(t *te
 	}
 	run(t, f.work, "git", "commit", "--allow-empty", "-m", "next")
 	run(t, f.work, "git", "push", f.bare, "HEAD:refs/heads/next")
+}
+
+// The leftover has no gitdir file, which makes it prunable to git, and git
+// prunes on its own: the maintenance it runs after every push prunes worktrees
+// as soon as one entry is prunable. That prune deletes the leftover file by
+// file, the very thing the removal avoids, so the leftover carries a lock file
+// that keeps git from pruning it.
+func TestWorktreeRemoveLeftoverSurvivesGitsOwnPruning(t *testing.T) {
+	f := newWorktreeRemoveFixture(t)
+	if err := WorktreeRemove(f.ctx, f.bare, f.wt); err != nil {
+		t.Fatalf("WorktreeRemove: %v", err)
+	}
+
+	if _, err := Run(f.ctx, f.bare, "worktree", "prune", "--expire=now"); err != nil {
+		t.Fatalf("worktree prune: %v", err)
+	}
+	if _, err := Run(f.ctx, f.bare, "maintenance", "run", "--auto"); err != nil {
+		t.Fatalf("maintenance run --auto: %v", err)
+	}
+	run(t, f.work, "git", "commit", "--allow-empty", "-m", "next")
+	run(t, f.work, "git", "push", f.bare, "HEAD:refs/heads/next")
+
+	if names := adminEntryNames(t, f.admin); !slices.Equal(names, []string{"commondir", "locked"}) {
+		t.Fatalf("after git's own pruning the leftover holds %v, want commondir and locked", names)
+	}
 }
 
 // The entry must be unlisted before anything a reader depends on is deleted:
@@ -180,38 +204,58 @@ func TestWorktreeRemoveSweepsLeftoverAdminEntriesOnlyAfterTheGracePeriod(t *test
 	if err := WorktreeRemove(f.ctx, f.bare, f.wt); err != nil {
 		t.Fatalf("WorktreeRemove: %v", err)
 	}
+	addAndRemove := func(name string) {
+		t.Helper()
+		wt := filepath.Join(t.TempDir(), name)
+		if err := WorktreeAdd(f.ctx, f.bare, wt, f.sha); err != nil {
+			t.Fatalf("worktree add %s: %v", name, err)
+		}
+		if err := WorktreeRemove(f.ctx, f.bare, wt); err != nil {
+			t.Fatalf("WorktreeRemove %s: %v", name, err)
+		}
+	}
+	old := time.Now().Add(-2 * removedWorktreeGrace)
+	age := func(path string) {
+		t.Helper()
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	second := filepath.Join(t.TempDir(), "run-2")
-	if err := WorktreeAdd(f.ctx, f.bare, second, f.sha); err != nil {
-		t.Fatalf("worktree add: %v", err)
-	}
-	if err := WorktreeRemove(f.ctx, f.bare, second); err != nil {
-		t.Fatalf("WorktreeRemove second: %v", err)
-	}
+	addAndRemove("run-2")
 	if _, err := os.Stat(filepath.Join(f.admin, "commondir")); err != nil {
 		t.Fatalf("a leftover younger than the grace period was swept: %v", err)
 	}
 
-	old := time.Now().Add(-2 * removedWorktreeGrace)
-	if err := os.Chtimes(f.admin, old, old); err != nil {
-		t.Fatal(err)
-	}
-	third := filepath.Join(t.TempDir(), "run-3")
-	if err := WorktreeAdd(f.ctx, f.bare, third, f.sha); err != nil {
+	// The leftover's age is its lock file's.
+	age(filepath.Join(f.admin, "locked"))
+
+	// A live worktree is never swept, however old and even when locked.
+	live := filepath.Join(t.TempDir(), "run-3")
+	if err := WorktreeAdd(f.ctx, f.bare, live, f.sha); err != nil {
 		t.Fatalf("worktree add: %v", err)
 	}
-	// A live worktree's admin directory is never swept, however old.
 	liveAdmin := filepath.Join(f.bare, "worktrees", "run-3")
-	if err := os.Chtimes(liveAdmin, old, old); err != nil {
+	if err := os.WriteFile(filepath.Join(liveAdmin, "locked"), []byte(removedWorktreeLockReason), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fourth := filepath.Join(t.TempDir(), "run-4")
-	if err := WorktreeAdd(f.ctx, f.bare, fourth, f.sha); err != nil {
+	age(filepath.Join(liveAdmin, "locked"))
+
+	// Nor is an entry without a gitdir file that somebody else locked.
+	foreign := filepath.Join(t.TempDir(), "run-4")
+	if err := WorktreeAdd(f.ctx, f.bare, foreign, f.sha); err != nil {
 		t.Fatalf("worktree add: %v", err)
 	}
-	if err := WorktreeRemove(f.ctx, f.bare, fourth); err != nil {
-		t.Fatalf("WorktreeRemove fourth: %v", err)
+	foreignAdmin := filepath.Join(f.bare, "worktrees", "run-4")
+	if err := os.WriteFile(filepath.Join(foreignAdmin, "locked"), []byte("on a portable drive\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	age(filepath.Join(foreignAdmin, "locked"))
+	if err := os.Remove(filepath.Join(foreignAdmin, "gitdir")); err != nil {
+		t.Fatal(err)
+	}
+
+	addAndRemove("run-5")
 
 	if _, err := os.Lstat(f.admin); !os.IsNotExist(err) {
 		t.Fatalf("a leftover older than the grace period was not swept (lstat error %v)", err)
@@ -219,8 +263,11 @@ func TestWorktreeRemoveSweepsLeftoverAdminEntriesOnlyAfterTheGracePeriod(t *test
 	if _, err := os.Stat(filepath.Join(f.bare, "worktrees", "run-2", "commondir")); err != nil {
 		t.Fatalf("the younger leftover was swept: %v", err)
 	}
-	if got, err := Run(f.ctx, third, "rev-parse", "HEAD"); err != nil || got != f.sha {
+	if got, err := Run(f.ctx, live, "rev-parse", "HEAD"); err != nil || got != f.sha {
 		t.Fatalf("live worktree after the sweep: rev-parse = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(foreignAdmin, "HEAD")); err != nil {
+		t.Fatalf("an entry somebody else locked was swept: %v", err)
 	}
 }
 
