@@ -12,6 +12,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/dockerreap"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/testguidance"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -93,12 +94,14 @@ Rules:
 - A generic driver or user instruction asking for broad or full-suite confirmation does NOT override this product boundary. Keep verification focused on the failure and intent.
 - Never treat "do not run everything" as permission to run nothing: if you cannot reproduce or re-verify with a targeted check, report that honestly in the summary rather than inventing a full-suite pass.
 - Before finishing, remove any transient artifacts your testing created in the working tree (downloaded models, caches, build outputs, large binaries, or generated data directories) so they are not committed and pushed. Do not remove intentional source or test-file changes. Do not remove dependencies materialized by commands.prepare; later configured commands share them.
+%s
 - Return JSON with a single "summary" field when you are done.
 - The summary must be one concise sentence fragment suitable for a git commit subject.
 - Keep the summary under 10 words.%s`,
 			sctx.Run.Branch,
 			baseSHA,
 			sctx.Run.HeadSHA,
+			testServiceGuidance(sctx.Run.ID),
 			historySection,
 		)
 		if repair := testRepairFindings(sctx.PreviousFindings); repair != "" {
@@ -217,6 +220,7 @@ Drive each scenario:
 - Stand the product up the way an end user runs it, in an isolated environment, and drive each scenario end-to-end against that running product.
 - Getting every scenario live is your responsibility. When a scenario needs something that is not already provided - an environment, an instance, an account, records, a data set, an endpoint - find a workaround: build a disposable one yourself (throwaway fixtures, data, configuration, or a local instance), point the real product at it through whatever isolation the product supports (a separate root, home, or data directory, a temporary config, a local port, a sandbox or test mode), and drive the scenario there. A missing environment is a problem to solve, not a reason to skip the scenario. A scenario driven by the real product against a disposable setup you built is live; a fixture that stands in for the product itself is not.
 - Everything you build must stay disposable and isolated: never read or write the operator's real data, real configuration, or shared services, and tear it down before finishing unless it is evidence.
+%s
 - When a live scenario drives a TUI through a pseudo-terminal, give the pty a non-zero window size (TIOCSWINSZ) before the TUI reads its grid, and drain the master. A 0x0 grid makes the TUI exit immediately with a symptom such as "terminal reported a zero-sized grid" and never register, so a live UI check silently becomes a fake. Bare script(1) and pty.fork() from a non-tty parent typically yield that 0x0 grid.
 - Mark a scenario "live": true ONLY when you drove it against the real product in this run. A unit test, a stub, a mock, a recorded fixture, or reading the code is NOT live.
 - Return a scenario with result "untested" only when live validation is truly impossible here: every workaround you could find within the workspace boundary still cannot drive it. Its reason must state what you tried in order to drive it live and why each attempt cannot work, naming the specific tool, credential, permission, or authority that is out of reach and how to provide it. "No environment was provided" is not such a reason while you could have built a disposable one.
@@ -265,6 +269,7 @@ Rules:
 		sctx.Run.HeadSHA,
 		configuredTestCommand,
 		trustedRunbook,
+		testServiceGuidance(sctx.Run.ID),
 		evidenceGuidance,
 		fallbackGuidance,
 		reassessHistory,
@@ -314,6 +319,22 @@ Rules:
 		ExitCode:      baselineExitCode,
 		FixSummary:    fixSummary,
 	}, nil
+}
+
+// testServiceGuidance tells a Test agent how to stand up a service its
+// scenario needs without leaving it on the operator's machine. Both Test turns
+// carry it, since a repair turn reproduces a failure against the same
+// services. The label is the one the daemon reaps by when the run ends
+// (internal/dockerreap), so a container the agent labels is removed with its
+// volumes even when the agent's own teardown never ran; an image's declared
+// volumes are named because `docker rm` without -v keeps them as anonymous
+// volumes, which is how a database started by hand leaked a pair per run.
+func testServiceGuidance(runID string) string {
+	label := dockerreap.Label(runID)
+	return fmt.Sprintf(`- When a scenario needs a service such as a database, a queue, or a cache, use the repository's own supported command for it when the repository names one (a script, Make target, or Compose file its docs, agent instructions, or test runbook point to): that command already starts and removes the service the way the project intends.
+- Only when there is none, start the service yourself with Docker and label everything you create with this run's label: `+"`docker run --rm --label %[1]s ...`"+`, `+"`docker network create --label %[1]s ...`"+`, `+"`docker volume create --label %[1]s ...`"+`, and the same label on every service, network, and volume of a Compose file you write.
+- Keep a container's data off anonymous volumes: list the volumes its image declares with `+"`docker image inspect -f '{{json .Config.Volumes}}' <image>`"+` and mount each one as tmpfs (--tmpfs <path>) or on a named volume created with the label above, never an anonymous volume.
+- Before finishing, remove every container you started with `+"`docker rm -f -v <container>`"+` (-v removes its anonymous volumes) and every network and volume you created. no-mistakes removes every container, network, and volume labelled %[1]s when this run ends, failed runs included, as a backstop; an unlabelled one stays on the operator's machine.`, label)
 }
 
 // testAnalyzerMaxAttempts is the number of evidence-analyzer invocations
