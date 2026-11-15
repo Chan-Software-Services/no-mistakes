@@ -199,9 +199,18 @@ func updateOwnedPR(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, initia
 // Restamping is also an owner-authorized appendix edit. Recompute its integrity
 // guard without touching author text, while refusing evidence edited by anyone
 // else. Legacy unmarked bodies retain the existing restamp contract.
+//
+// What is written back carries no image or video either (neutralizePRMedia):
+// the generated appendix of an owned body, never the author's text around it,
+// and the whole of an unmarked body, which the pipeline generated in full. So a
+// body written before a media form was neutralized gets no new revision that
+// still carries it.
 func rebindOwnedPRAttestation(body, head string, steps []*db.StepResult, policy pipelineAttestationPolicy) (string, bool, error) {
 	if !hasPRAppendixMarkers(body) {
 		updated, rebound := rebindPipelineAttestationWithSteps(body, head, steps, policy)
+		if rebound {
+			updated = neutralizePRMedia(updated)
+		}
 		return updated, rebound, nil
 	}
 	parts, err := parsePROwnedBody(body)
@@ -212,7 +221,7 @@ func rebindOwnedPRAttestation(body, head string, steps []*db.StepResult, policy 
 	if !rebound {
 		return "", false, fmt.Errorf("cannot rebind the owned PR attestation")
 	}
-	updated := parts.before + wrapPRAppendix(appendix) + parts.after
+	updated := parts.before + wrapPRAppendix(neutralizePRMedia(appendix)) + parts.after
 	if len(updated) > maxPullRequestBodyBytes {
 		return "", false, fmt.Errorf("restamped PR body exceeds the publication budget")
 	}

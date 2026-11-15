@@ -472,3 +472,48 @@ func TestNeutralizePRMedia_BreaksLessCommonLinkForms(t *testing.T) {
 		}
 	}
 }
+
+// TestPushStep_AttestationRewriteCarriesNoMedia covers a PR whose generated
+// body predates the media rule: when the Push step rewrites that body to attest
+// the new head, the revision it writes carries no embed and no media link, and
+// still verifies.
+func TestPushStep_AttestationRewriteCarriesNoMedia(t *testing.T) {
+	updated, _, newHead := pushOntoExistingPR(t, func(priorHead string) string {
+		return "## Testing\n\n" + noMediaInjection + "\n\n" + compliantPipelineBody(t, priorHead)
+	})
+	assertNoMediaInPRBody(t, updated)
+	if !strings.Contains(updated, "## Testing") || !strings.Contains(updated, "(image link removed)") {
+		t.Fatalf("the rewritten body must keep its text with the media neutralized:\n%s", updated)
+	}
+	if got, out := runVerifyPy(t, updated, newHead); got != "success" {
+		t.Fatalf("the rewritten body must still verify at the pushed head, got %s\n%s", got, out)
+	}
+}
+
+// TestRebindOwnedPRAttestation_NeutralizesOnlyTheGeneratedAppendix is the same
+// rewrite on a body with author-owned text: the generated appendix is
+// neutralized under a fresh integrity guard, and the author's text around it is
+// written back exactly as it was read.
+func TestRebindOwnedPRAttestation_NeutralizesOnlyTheGeneratedAppendix(t *testing.T) {
+	t.Parallel()
+	_, appendix := ownedFixture(t)
+	author := "# Overview\n\nThe author's own ![diagram](docs/flow.png).\n\n"
+	after := "\nAuthor footer <img src=\"logo.png\">"
+	body := author + wrapPRAppendix(appendix+"\n\nGenerated "+noMediaInjection) + after
+
+	updated, rebound, err := rebindOwnedPRAttestation(body, "0123456789abcdef0123456789abcdef01234567", nil, pipelineAttestationPolicy{})
+	if err != nil || !rebound {
+		t.Fatalf("rebind failed: rebound=%v err=%v", rebound, err)
+	}
+	parts, err := parsePROwnedBody(updated)
+	if err != nil {
+		t.Fatalf("rewritten body must keep its integrity guard: %v", err)
+	}
+	if parts.before != author || parts.after != after {
+		t.Fatalf("author text was rewritten:\nbefore %q\nafter  %q", parts.before, parts.after)
+	}
+	assertNoMediaInPRBody(t, parts.appendix)
+	if !strings.Contains(parts.appendix, "Generated see") {
+		t.Fatalf("the appendix lost its text:\n%s", parts.appendix)
+	}
+}
