@@ -81,7 +81,8 @@ printf '%s\n' "$id" > ` + filepath.Join(out, "container") + `
 	deadline := time.Now().Add(dockerreap.DefaultTimeout + 20*time.Second)
 	for inspect("container", "inspect", containers[0]) == nil {
 		if time.Now().After(deadline) {
-			t.Fatalf("run %s ended and its container %s is still there", run.ID, containers[0])
+			h.dumpDebugState()
+			t.Fatalf("run %s ended and its container %s is still there (%s)", run.ID, containers[0], runProgress(h.RunInfo(run.ID)))
 		}
 		time.Sleep(300 * time.Millisecond)
 	}

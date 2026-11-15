@@ -138,7 +138,7 @@ func TestWorktreeRootJourney(t *testing.T) {
 	// 8. Cleanup removed the run's own directory and nothing else in the
 	// operator's directory. Cleanup runs after the run reaches its terminal
 	// status, so this waits for it rather than sampling once.
-	waitForRemoval(t, wantDir, 30*time.Second)
+	waitForRemoval(t, h, run.ID, wantDir, 30*time.Second)
 	entries, err := os.ReadDir(runsRoot)
 	if err != nil {
 		t.Fatalf("read runs root: %v", err)
@@ -158,8 +158,9 @@ func TestWorktreeRootJourney(t *testing.T) {
 	t.Logf("after the run, %s holds only the operator's own %s", runsRoot, filepath.Base(operatorFile))
 }
 
-// waitForRemoval waits for the daemon's run cleanup to remove dir.
-func waitForRemoval(t *testing.T, dir string, timeout time.Duration) {
+// waitForRemoval waits for the daemon's cleanup of run runID to remove dir. On
+// timeout it dumps the debug state and reports where that run stood.
+func waitForRemoval(t *testing.T, h *Harness, runID, dir string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
@@ -167,7 +168,8 @@ func waitForRemoval(t *testing.T, dir string, timeout time.Duration) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Errorf("run worktree %q was still present %v after the run finished", dir, timeout)
+			h.dumpDebugState()
+			t.Errorf("run worktree %q was still present %v after the run finished (%s)", dir, timeout, runProgress(h.RunInfo(runID)))
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
