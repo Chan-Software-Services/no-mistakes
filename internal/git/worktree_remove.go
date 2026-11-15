@@ -30,6 +30,10 @@ const (
 // such a leftover from a worktree somebody locked.
 const removedWorktreeLockReason = "removed by no-mistakes; this leftover entry is deleted by a later removal\n"
 
+// removedWorktreeTrash is the directory, beside the repository's worktrees
+// directory, that the sweep moves a leftover entry into to delete it.
+const removedWorktreeTrash = "no-mistakes-removed-worktrees"
+
 // ErrNotLinkedWorktree is what WorktreeRemove returns, wrapped, for a path that
 // is not a linked worktree of the repository it was asked to remove it from.
 var ErrNotLinkedWorktree = errors.New("not a linked worktree of the repository")
@@ -163,13 +167,21 @@ entries:
 // sweepRemovedWorktreeAdmins deletes, best effort, the admin entries under
 // worktreesDir that an earlier WorktreeRemove left behind - no gitdir file, and
 // this package's lock file older than removedWorktreeGrace. skip is the entry
-// the caller is removing right now. The lock file goes last, so the entry is
-// never prunable while it still holds anything else.
+// the caller is removing right now.
+//
+// An entry is renamed out of worktreesDir before it is deleted, so it leaves
+// in one step: deleted in place it would, once its lock file is gone, be a
+// prunable entry until its directory went, and one prunable entry is all it
+// takes for the maintenance after a push to prune (see WorktreeRemove). The
+// rename leaves one such moment: git also counts as prunable an entry it
+// listed and then finds gone.
 func sweepRemovedWorktreeAdmins(worktreesDir, skip string, now time.Time) {
 	entries, err := os.ReadDir(worktreesDir)
 	if err != nil {
 		return
 	}
+	trash := filepath.Join(filepath.Dir(worktreesDir), removedWorktreeTrash)
+	swept := false
 	for _, entry := range entries {
 		dir := filepath.Join(worktreesDir, entry.Name())
 		if !entry.IsDir() || dir == skip {
@@ -186,10 +198,18 @@ func sweepRemovedWorktreeAdmins(worktreesDir, skip string, now time.Time) {
 		if reason, err := os.ReadFile(lock); err != nil || string(reason) != removedWorktreeLockReason {
 			continue
 		}
-		if err := removeAllExcept(dir, worktreeAdminLocked); err != nil {
-			continue
+		if err := os.MkdirAll(trash, 0o755); err != nil {
+			return
 		}
-		_ = os.Remove(lock)
-		_ = os.Remove(dir)
+		target := filepath.Join(trash, entry.Name())
+		_ = os.RemoveAll(target)
+		if err := os.Rename(dir, target); err == nil {
+			swept = true
+		}
+	}
+	if swept {
+		// Whatever is in the trash is already out of git's sight, an entry an
+		// interrupted sweep left there included.
+		_ = removeAllExcept(trash)
 	}
 }

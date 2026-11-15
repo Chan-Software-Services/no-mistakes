@@ -260,6 +260,9 @@ func TestWorktreeRemoveSweepsLeftoverAdminEntriesOnlyAfterTheGracePeriod(t *test
 	if _, err := os.Lstat(f.admin); !os.IsNotExist(err) {
 		t.Fatalf("a leftover older than the grace period was not swept (lstat error %v)", err)
 	}
+	if names := adminEntryNames(t, filepath.Join(f.bare, removedWorktreeTrash)); len(names) != 0 {
+		t.Fatalf("the sweep left %v in its trash directory", names)
+	}
 	if _, err := os.Stat(filepath.Join(f.bare, "worktrees", "run-2", "commondir")); err != nil {
 		t.Fatalf("the younger leftover was swept: %v", err)
 	}
@@ -324,5 +327,25 @@ func TestWorktreeRemoveFromANonBareRepository(t *testing.T) {
 	}
 	if strings.Contains(out, "linked") {
 		t.Fatalf("git still lists the worktree:\n%s", out)
+	}
+}
+
+// The daemon owns its run worktrees outright, so a lock somebody put on one
+// does not keep it: `git worktree remove --force` refuses a locked worktree.
+func TestWorktreeRemoveRemovesALockedWorktree(t *testing.T) {
+	f := newWorktreeRemoveFixture(t)
+	if _, err := Run(f.ctx, f.bare, "worktree", "lock", "--reason", "kept", f.wt); err != nil {
+		t.Fatalf("worktree lock: %v", err)
+	}
+
+	if err := WorktreeRemove(f.ctx, f.bare, f.wt); err != nil {
+		t.Fatalf("WorktreeRemove: %v", err)
+	}
+
+	if _, err := os.Lstat(f.wt); !os.IsNotExist(err) {
+		t.Fatalf("locked worktree's directory still exists (lstat error %v)", err)
+	}
+	if f.listsWorktree(t) {
+		t.Fatal("git still lists the locked worktree after removal")
 	}
 }
