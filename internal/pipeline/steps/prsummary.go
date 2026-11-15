@@ -1,12 +1,9 @@
 package steps
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"html"
-	"io"
 	"net/url"
 	"os"
 	"path"
@@ -785,8 +782,8 @@ func renderMediaArtifact(artifact types.TestArtifact) string {
 // embeddedArtifactText reads a file artifact and returns its text content,
 // truncated from the middle when it exceeds maxEmbeddedArtifactBytes. ok is
 // false when the artifact has no path, resolves outside the allowed roots, is
-// missing, empty, is not UTF-8 text, or carries an image or a video inside it
-// (evidence.HasInlineMedia). Image and video artifacts never reach it: they
+// missing, empty, or is not text the public may be shown
+// (readEmbeddedArtifactText). Image and video artifacts never reach it: they
 // render as their caption.
 func embeddedArtifactText(artifact types.TestArtifact, opts testingSummaryOptions, state *testingArtifactRenderState) (string, bool) {
 	if artifact.Path == "" {
@@ -843,24 +840,28 @@ func isTestScratchPath(p string, opts testingSummaryOptions) bool {
 	return ok && strings.SplitN(filepath.ToSlash(rel), "/", 2)[0] == evidence.ScratchDirName
 }
 
+// readEmbeddedArtifactText returns the text of an evidence file the PR body may
+// embed, cut from the middle when it is larger than maxEmbeddedArtifactBytes,
+// or "" when the file may not be shown. The PR body is as public as the
+// evidence branch, so the same rule decides both: evidence.IsPublishableText,
+// which reads the whole file, not only the part shown.
 func readEmbeddedArtifactText(fsPath string) (string, error) {
 	info, err := os.Stat(fsPath)
 	if err != nil || info.IsDir() {
 		return "", err
 	}
-	if info.Size() <= int64(maxEmbeddedArtifactBytes) {
-		data, err := os.ReadFile(fsPath)
-		if err != nil || !looksLikeTextArtifact(data) || evidence.HasInlineMedia(bytes.NewReader(data)) {
-			return "", err
-		}
-		return string(data), nil
-	}
-
 	file, err := os.Open(fsPath)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
+	if !evidence.IsPublishableText(filepath.Base(fsPath), file) {
+		return "", nil
+	}
+	if info.Size() <= int64(maxEmbeddedArtifactBytes) {
+		data, err := os.ReadFile(fsPath)
+		return string(data), err
+	}
 
 	headSize := maxEmbeddedArtifactBytes / 2
 	tailSize := maxEmbeddedArtifactBytes - headSize
@@ -874,26 +875,8 @@ func readEmbeddedArtifactText(fsPath string) (string, error) {
 	}
 	head = trimUTF8End(head)
 	tail = trimUTF8Start(tail)
-	if !looksLikeTextArtifact(head) || !looksLikeTextArtifact(tail) {
-		return "", nil
-	}
-	// The whole file is checked, not only the parts shown: a file that holds an
-	// image anywhere is not embedded at all.
-	if evidence.HasInlineMedia(bufio.NewReader(io.NewSectionReader(file, 0, info.Size()))) {
-		return "", nil
-	}
 	omitted := info.Size() - int64(len(head)+len(tail))
 	return string(head) + fmt.Sprintf("\n\n... [%d bytes truncated] ...\n\n", omitted) + string(tail), nil
-}
-
-func looksLikeTextArtifact(data []byte) bool {
-	if len(data) == 0 {
-		return false
-	}
-	if bytes.IndexByte(data, 0) != -1 {
-		return false
-	}
-	return utf8.Valid(data)
 }
 
 func trimUTF8End(data []byte) []byte {

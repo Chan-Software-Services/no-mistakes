@@ -1102,16 +1102,21 @@ func TestBuildTestingSummaryForPR_FallsBackForBinaryEvidence(t *testing.T) {
 	}
 }
 
-// TestBuildTestingSummaryForPR_NeverEmbedsTextCarryingAnImage keeps a text
-// artifact that holds an image inside it (a report, a capture) out of the PR
-// body, at any size: it is named by its label and stays with the run.
-func TestBuildTestingSummaryForPR_NeverEmbedsTextCarryingAnImage(t *testing.T) {
+// TestBuildTestingSummaryForPR_EmbedsOnlyPublishableText keeps out of the PR
+// body every file the evidence branch would not publish, readable or not: a
+// text file holding an image inside it at any size, a Markdown note with an
+// embed, and a file of a type that is not plain text evidence. Each is named
+// by its label and stays with the run.
+func TestBuildTestingSummaryForPR_EmbedsOnlyPublishableText(t *testing.T) {
 	evidenceRoot := filepath.Join(t.TempDir(), "evidence", "run-123")
 	const inline = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
 	small := writeTempEvidenceFile(t, evidenceRoot, "report.txt", []byte("<html><body><p>all green</p><img src=\""+inline+"\"></body></html>\n"))
 	padding := strings.Repeat("request served in 12ms\n", maxEmbeddedArtifactBytes/10)
 	large := writeTempEvidenceFile(t, evidenceRoot, "capture.txt", []byte(padding+inline+"\n"+padding))
-	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"label":"Test report","path":%q},{"label":"Network capture","path":%q}]}`, small, large)
+	note := writeTempEvidenceFile(t, evidenceRoot, "notes.md", []byte("# Checkout\n\n![page](checkout.png)\n"))
+	archive := writeTempEvidenceFile(t, evidenceRoot, "trace.zip", []byte("PK archive that reads as text\n"))
+	report := writeTempEvidenceFile(t, evidenceRoot, "report.html", []byte("<html><body>report body</body></html>\n"))
+	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"label":"Test report","path":%q},{"label":"Network capture","path":%q},{"label":"Run notes","path":%q},{"label":"Browser trace","path":%q},{"label":"Browser report","path":%q}]}`, small, large, note, archive, report)
 	steps := []*db.StepResult{
 		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
 	}
@@ -1124,14 +1129,17 @@ func TestBuildTestingSummaryForPR_NeverEmbedsTextCarryingAnImage(t *testing.T) {
 	for _, want := range []string{
 		"- Evidence: Test report (kept with the run, not published)",
 		"- Evidence: Network capture (kept with the run, not published)",
+		"- Evidence: Run notes (kept with the run, not published)",
+		"- Evidence: Browser trace (kept with the run, not published)",
+		"- Evidence: Browser report (kept with the run, not published)",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("expected %q, got:\n%s", want, md[:min(len(md), 800)])
 		}
 	}
-	for _, unwanted := range []string{"iVBORw0KGgo", "data:image", "all green", "request served"} {
+	for _, unwanted := range []string{"iVBORw0KGgo", "data:image", "all green", "request served", "checkout.png", "PK archive", "report body", "```text"} {
 		if strings.Contains(md, unwanted) {
-			t.Errorf("text carrying an image must not be embedded, found %q", unwanted)
+			t.Errorf("a file the evidence branch would not publish must not be embedded, found %q", unwanted)
 		}
 	}
 }

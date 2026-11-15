@@ -354,11 +354,13 @@ func collectFiles(root string, exclude []string) ([]collectedFile, error) {
 		if info.Size() > maxFileBytes {
 			return fmt.Errorf("evidence file %s is %d bytes, over the %d byte limit", d.Name(), info.Size(), maxFileBytes)
 		}
-		data, err := os.ReadFile(p)
+		file, err := os.Open(p)
 		if err != nil {
 			return fmt.Errorf("read evidence file %s: %w", d.Name(), err)
 		}
-		if !IsPublishableText(d.Name(), data) {
+		publishable := IsPublishableText(d.Name(), file)
+		_ = file.Close()
+		if !publishable {
 			return nil
 		}
 		total += info.Size()
