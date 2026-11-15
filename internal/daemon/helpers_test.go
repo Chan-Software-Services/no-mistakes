@@ -81,6 +81,12 @@ func TestMain(m *testing.M) {
 	// via GIT_CONFIG_COUNT/KEY_n/VALUE_n; tests that need it re-set it with
 	// t.Setenv (issue #362).
 	os.Unsetenv("GIT_CONFIG_COUNT")
+	// Every run end reaps the run's Docker objects. The daemon tests finish
+	// hundreds of runs, so the real reap would put Docker calls on the
+	// machine's daemon, where there is one, into every package run. The
+	// recorder is installed once, never swapped, so a test reads what a run
+	// reaped without racing another test's run goroutine.
+	reapRunDocker = dockerReaps.record
 	os.Exit(m.Run())
 }
 

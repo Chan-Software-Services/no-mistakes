@@ -98,6 +98,9 @@ Configured commands and one-shot agent subprocesses are terminated as a process 
 Each process is asked to exit first and only forcibly killed if it is still running a few seconds later.
 A process can still escape that tree by detaching itself into its own session, so when a run finishes the daemon also terminates anything still standing in that run's worktree before removing the directory.
 That sweep is scoped by working directory: it never touches a worktree whose run is still active, and it can never reach a process working outside `~/.no-mistakes/worktrees/` or outside a run worktree a run record names in a configured worktree root.
+A Docker container outlives every process of the run, so the Test step's prompts ask its agent to label each container, network, and volume it starts with `no-mistakes.run=<run id>`, and when the run ends, failed runs included, the daemon removes every container (with its anonymous volumes), network, and volume carrying that run's label.
+A run the previous daemon was executing when it died is reaped the same way at the next startup, with its orphan worktree.
+Nothing without the label is ever touched, and a machine without Docker, or whose Docker engine is not running, skips this step.
 
 On Linux, a step that exhausts memory fails only its own run.
 Configured commands, agent subprocesses, and managed agent servers raise their `oom_score_adj` so the kernel OOM killer picks them before the daemon.
