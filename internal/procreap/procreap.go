@@ -19,8 +19,8 @@
 // parent is now. That is the association this package matches on.
 //
 // Deliberately NOT matched: the command line. A path can appear in argv for
-// entirely legitimate reasons (the daemon's own `git worktree remove`, a
-// grep, an editor), so argv matching trades a precise signal for a
+// entirely legitimate reasons (a `git worktree` command, a grep, an
+// editor), so argv matching trades a precise signal for a
 // false-positive that would kill an innocent process. cwd is held by exactly
 // the processes that are actually running inside the run.
 //
