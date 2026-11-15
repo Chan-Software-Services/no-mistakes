@@ -24,8 +24,8 @@ import (
 // it by resuming the reviewer's own session.
 //
 // The run is always the caller's current branch's active run. There is no
-// --run: axi's run resolution is branch-scoped by design (see the AXI Run
-// Resolution section in AGENTS.md), and this is a MUTATING command, so a second
+// --run: axi's run resolution is branch-scoped by design (see the `axi status`
+// invariant in AGENTS.md), and this is a MUTATING command, so a second
 // selection path is exactly what that scoping exists to prevent - it would let
 // an answer meant for one branch's reviewer land on another's. The cost is
 // accepted and known: the command must run from a clone of the repository whose
