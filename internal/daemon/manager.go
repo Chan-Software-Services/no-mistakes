@@ -632,7 +632,13 @@ func (m *RunManager) cleanupRunEvidence(cfg *config.Config, runID string) {
 }
 
 // removeRunWorktree sweeps processes before deciding whether to remove the
-// directory, so refusal retention cannot keep escaped workers alive.
+// directory, so refusal retention cannot keep escaped workers alive, and then
+// removes the Docker containers, networks and volumes the run's agents
+// labelled as the run's (see internal/dockerreap). The Docker reap runs after
+// the process sweep, so a foreground `docker run` the sweep ended cannot start
+// a container after the reap listed none, and before the retention decision,
+// since a preserved worktree is kept for inspection and a database container is
+// not part of what is inspected.
 //
 // Every removal of a run worktree this package performs goes through here, and
 // none calls git.WorktreeRemove directly, because the ordering is easy to forget
@@ -641,6 +647,7 @@ func (m *RunManager) cleanupRunEvidence(cfg *config.Config, runID string) {
 // different routes. reason distinguishes the routes in the log.
 func (m *RunManager) removeRunWorktree(repoID, runID, gateDir, wtDir, reason string) {
 	m.sweepRunWorktreeProcesses(repoID, runID, wtDir)
+	reapRunDocker([]string{runID}, reason)
 	run, err := m.db.GetRun(runID)
 	if err != nil {
 		slog.Warn("preserving run worktree: cannot read run", "run_id", runID, "error", err)

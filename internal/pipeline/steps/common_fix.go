@@ -83,11 +83,17 @@ var commitSummarySchema = json.RawMessage(fmt.Sprintf(`{
 // hasBlockingFindings returns true if any finding has error or warning severity.
 func hasBlockingFindings(items []Finding) bool {
 	for _, f := range items {
-		if f.Severity == "error" || f.Severity == "warning" {
+		if isBlockingFinding(f) {
 			return true
 		}
 	}
 	return false
+}
+
+// isBlockingFinding reports whether a finding's severity parks a step for a
+// decision: error or warning.
+func isBlockingFinding(f Finding) bool {
+	return f.Severity == types.FindingSeverityError || f.Severity == types.FindingSeverityWarning
 }
 
 // reviewedPathsCoverReviewable reports whether reviewedPaths (a review turn's
