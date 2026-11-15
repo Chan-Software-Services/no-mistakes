@@ -502,11 +502,11 @@ func TestPollRunStatusKeepsTheLastRunSeenWhenLaterPollsFail(t *testing.T) {
 		return ipc.GetRunsResult{}, errors.New("daemon busy")
 	})
 
-	run, err := h.pollRunStatus("feature/e2e", 500*time.Millisecond, runTerminal, "finish")
+	run, err := h.pollRunStatus("feature/e2e", 2*time.Second, runTerminal, "finish")
 	if run != nil || err == nil {
 		t.Fatalf("pollRunStatus() = %v, %v, want a timeout error", run, err)
 	}
-	want := "run for branch feature/e2e did not finish in 500ms (run status=running, no steps recorded; runs lookup failed: get runs: "
+	want := "run for branch feature/e2e did not finish in 2s (run status=running, no steps recorded; runs lookup failed: get runs: "
 	if !strings.HasPrefix(err.Error(), want) || !strings.Contains(err.Error(), "daemon busy") {
 		t.Fatalf("pollRunStatus() error = %q, want prefix %q and the call's error", err, want)
 	}
