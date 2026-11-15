@@ -1,10 +1,12 @@
 package steps
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net/url"
 	"os"
 	"path"
@@ -783,8 +785,9 @@ func renderMediaArtifact(artifact types.TestArtifact) string {
 // embeddedArtifactText reads a file artifact and returns its text content,
 // truncated from the middle when it exceeds maxEmbeddedArtifactBytes. ok is
 // false when the artifact has no path, resolves outside the allowed roots, is
-// missing, empty, or is not UTF-8 text. Image and video artifacts never reach
-// it: they render as their caption.
+// missing, empty, is not UTF-8 text, or carries an image or a video inside it
+// (evidence.HasInlineMedia). Image and video artifacts never reach it: they
+// render as their caption.
 func embeddedArtifactText(artifact types.TestArtifact, opts testingSummaryOptions, state *testingArtifactRenderState) (string, bool) {
 	if artifact.Path == "" {
 		return "", false
@@ -847,7 +850,7 @@ func readEmbeddedArtifactText(fsPath string) (string, error) {
 	}
 	if info.Size() <= int64(maxEmbeddedArtifactBytes) {
 		data, err := os.ReadFile(fsPath)
-		if err != nil || !looksLikeTextArtifact(data) {
+		if err != nil || !looksLikeTextArtifact(data) || evidence.HasInlineMedia(bytes.NewReader(data)) {
 			return "", err
 		}
 		return string(data), nil
@@ -872,6 +875,11 @@ func readEmbeddedArtifactText(fsPath string) (string, error) {
 	head = trimUTF8End(head)
 	tail = trimUTF8Start(tail)
 	if !looksLikeTextArtifact(head) || !looksLikeTextArtifact(tail) {
+		return "", nil
+	}
+	// The whole file is checked, not only the parts shown: a file that holds an
+	// image anywhere is not embedded at all.
+	if evidence.HasInlineMedia(bufio.NewReader(io.NewSectionReader(file, 0, info.Size()))) {
 		return "", nil
 	}
 	omitted := info.Size() - int64(len(head)+len(tail))

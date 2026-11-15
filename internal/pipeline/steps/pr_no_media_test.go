@@ -279,7 +279,7 @@ func TestPRStep_StoreInRepoPublishesTheLogAndNotTheScreenshot(t *testing.T) {
 		return &agent.Result{Output: json.RawMessage(`{"title":"feat: demo change","body":"## What Changed\n\n- demo"}`)}, nil
 	}}
 	png := writeNoMediaEvidence(t, testEvidenceDir(sctx), "checkout.png", "\x89PNG binary")
-	logPath := writeNoMediaEvidence(t, testEvidenceDir(sctx), "server.bin", "\x00\x01 binary log")
+	logPath := writeNoMediaEvidence(t, testEvidenceDir(sctx), "server.log", "POST /checkout 200\n")
 	insertCompletedStep(t, sctx, types.StepTest, findingsJSON(t, types.Findings{
 		TestingSummary: "Evidence was collected.",
 		Artifacts: []types.TestArtifact{
@@ -294,11 +294,11 @@ func TestPRStep_StoreInRepoPublishesTheLogAndNotTheScreenshot(t *testing.T) {
 	}
 	tip := gitCmd(t, remote, "rev-parse", "refs/heads/no-mistakes/evidence")
 	tree := gitCmd(t, remote, "ls-tree", "-r", "--name-only", tip)
-	if strings.Contains(tree, "checkout.png") || !strings.Contains(tree, ".no-mistakes/evidence/feature/add-login/server.bin") {
+	if strings.Contains(tree, "checkout.png") || !strings.Contains(tree, ".no-mistakes/evidence/feature/add-login/server.log") {
 		t.Fatalf("evidence branch must carry the log and not the screenshot:\n%s", tree)
 	}
 	assertNoMediaInPRBody(t, content.Body)
-	wantLink := "- Evidence: [Server log](https://github.com/example/widgets/blob/" + tip + "/.no-mistakes/evidence/feature/add-login/server.bin)"
+	wantLink := "Source: [Server log](https://github.com/example/widgets/blob/" + tip + "/.no-mistakes/evidence/feature/add-login/server.log)"
 	if !strings.Contains(content.Body, wantLink) {
 		t.Fatalf("expected the commit-pinned log link %q:\n%s", wantLink, content.Body)
 	}
@@ -450,6 +450,10 @@ func TestNeutralizePRMedia_BreaksLessCommonLinkForms(t *testing.T) {
 		{`https://github.com/owner/repo/assets/12345/` + assetID, `(attachment link removed)`},
 		{`[shot](https://github.com/owner/repo/assets/12345/` + assetID + `)`, `[shot]\((attachment link removed))`},
 		{`https://github.com/user&#45;attachments/assets/` + assetID, `(attachment link removed)`},
+		{`https://user-images.githubusercontent.com/12345/67890-` + assetID, `(attachment link removed)`},
+		{`<img src="data:image/png;base64,iVBORw0KGgoAAAA=">`, `<\img src="(image link removed)">`},
+		{`see data:image/png;base64,iVBORw0KGgoAAAA= now`, `see (image link removed) now`},
+		{`[clip](data:video/mp4;base64,AAAAIGZ0eXA=)`, `[clip]\((video link removed))`},
 		// Ordinary links in the same forms.
 		{`see www.example.com/docs now`, `see www.example.com/docs now`},
 		{"[docs]: ./docs/guide.md\n\nSee [the guide][docs].", "[docs]: ./docs/guide.md\n\nSee [the guide][docs]."},
@@ -457,6 +461,7 @@ func TestNeutralizePRMedia_BreaksLessCommonLinkForms(t *testing.T) {
 		{`<a href="my notes.txt">x</a>`, `<a href="my notes.txt">x</a>`},
 		{`https://example.com/a&#46;txt`, `https://example.com/a&#46;txt`},
 		{`https://github.com/owner/repo/assets/readme`, `https://github.com/owner/repo/assets/readme`},
+		{`data:text/plain;base64,aGVsbG8=`, `data:text/plain;base64,aGVsbG8=`},
 	} {
 		got := neutralizePRMedia(tc.in)
 		if got != tc.want {

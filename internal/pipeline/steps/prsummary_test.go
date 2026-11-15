@@ -3,7 +3,6 @@ package steps
 import (
 	"encoding/json"
 	"fmt"
-	"html"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1077,8 +1076,8 @@ func TestBuildTestingSummaryForPR_LimitsTotalEmbeddedTextEvidence(t *testing.T) 
 	if strings.Contains(md, thirdBody) {
 		t.Fatalf("did not expect evidence beyond the total budget to be embedded")
 	}
-	if !strings.Contains(md, "- Evidence: Third log (local file: <code>"+html.EscapeString(thirdPath)+"</code>)") {
-		t.Fatalf("expected evidence beyond the total budget to fall back to a local source, got:\n%s", md)
+	if !strings.Contains(md, "- Evidence: Third log (kept with the run, not published)") || strings.Contains(md, thirdPath) {
+		t.Fatalf("expected evidence beyond the total budget to be named by its label only, got:\n%s", md[len(md)-min(len(md), 600):])
 	}
 }
 
@@ -1095,11 +1094,45 @@ func TestBuildTestingSummaryForPR_FallsBackForBinaryEvidence(t *testing.T) {
 
 	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", "abc123", t.TempDir(), evidenceRoot, nil)
 
-	if !strings.Contains(md, "- Evidence: Binary capture (local file: <code>"+html.EscapeString(localPath)+"</code>)") {
-		t.Fatalf("expected binary evidence to fall back to a local file reference, got:\n%s", md)
+	if !strings.Contains(md, "- Evidence: Binary capture (kept with the run, not published)") || strings.Contains(md, localPath) || strings.Contains(md, "capture.dat") {
+		t.Fatalf("expected binary evidence to be named by its label only, got:\n%s", md)
 	}
 	if strings.Contains(md, "```text") {
 		t.Fatalf("did not expect binary content to be embedded as text, got:\n%s", md)
+	}
+}
+
+// TestBuildTestingSummaryForPR_NeverEmbedsTextCarryingAnImage keeps a text
+// artifact that holds an image inside it (a report, a capture) out of the PR
+// body, at any size: it is named by its label and stays with the run.
+func TestBuildTestingSummaryForPR_NeverEmbedsTextCarryingAnImage(t *testing.T) {
+	evidenceRoot := filepath.Join(t.TempDir(), "evidence", "run-123")
+	const inline = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
+	small := writeTempEvidenceFile(t, evidenceRoot, "report.txt", []byte("<html><body><p>all green</p><img src=\""+inline+"\"></body></html>\n"))
+	padding := strings.Repeat("request served in 12ms\n", maxEmbeddedArtifactBytes/10)
+	large := writeTempEvidenceFile(t, evidenceRoot, "capture.txt", []byte(padding+inline+"\n"+padding))
+	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"label":"Test report","path":%q},{"label":"Network capture","path":%q}]}`, small, large)
+	steps := []*db.StepResult{
+		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
+	}
+	rounds := map[string][]*db.StepRound{
+		"s1": {{Round: 1, Trigger: "initial", FindingsJSON: &findings, DurationMS: 300}},
+	}
+
+	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", "abc123", t.TempDir(), evidenceRoot, nil)
+
+	for _, want := range []string{
+		"- Evidence: Test report (kept with the run, not published)",
+		"- Evidence: Network capture (kept with the run, not published)",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("expected %q, got:\n%s", want, md[:min(len(md), 800)])
+		}
+	}
+	for _, unwanted := range []string{"iVBORw0KGgo", "data:image", "all green", "request served"} {
+		if strings.Contains(md, unwanted) {
+			t.Errorf("text carrying an image must not be embedded, found %q", unwanted)
+		}
 	}
 }
 

@@ -57,7 +57,7 @@ func publishRunEvidence(sctx *pipeline.StepContext) *evidenceLinks {
 	}
 	repoPath := githubRepoPath(linkURL)
 	if repoPath == "" {
-		sctx.Log("test evidence not published: this provider has no derivable file links, linking local paths instead")
+		sctx.Log("test evidence not published: this provider has no derivable file links, so the evidence stays with the run")
 		return nil
 	}
 
@@ -82,7 +82,7 @@ func publishRunEvidence(sctx *pipeline.StepContext) *evidenceLinks {
 		ForbiddenBranches: []string{branch, sctx.Repo.DefaultBranch},
 	})
 	if err != nil {
-		sctx.Log(fmt.Sprintf("test evidence not published, linking local paths instead: %v", err))
+		sctx.Log(fmt.Sprintf("test evidence not published, it stays with the run: %v", err))
 		return nil
 	}
 	if result == nil || result.CommitSHA == "" {

@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
@@ -432,94 +435,171 @@ func neutralizePRContent(content prContent) prContent {
 }
 
 var (
-	// prMediaTagPattern matches an HTML element that can show an image or a
-	// video. "<image" is listed because HTML parsers read it as "<img".
-	prMediaTagPattern = regexp.MustCompile(`(?i)<(img|image|picture|source|video|svg|embed|object|iframe)\b`)
-	// prAnchorTagPattern and prHrefPattern find an HTML link and its target.
+	// prAnchorTagPattern and prHrefPattern find an HTML link and its target. A
+	// quoted value is read whole, spaces included.
 	prAnchorTagPattern = regexp.MustCompile(`(?i)<a\b[^>]*>`)
-	prHrefPattern      = regexp.MustCompile(`(?i)\bhref\s*=\s*["']?([^"'\s>]+)`)
+	prHrefPattern      = regexp.MustCompile(`(?i)\bhref\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)'|["']?([^"'\s>]+))`)
 	// prLinkAttributePattern finds an HTML attribute value that loads or links
 	// a resource, relative paths included.
-	prLinkAttributePattern = regexp.MustCompile(`(?i)\b(?:href|src|srcset|poster|data)\s*=\s*["']?([^"'\s>]+)`)
+	prLinkAttributePattern = regexp.MustCompile(`(?i)\b(?:href|src|srcset|poster|data)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)'|["']?([^"'\s>]+))`)
 	// prMarkdownLinkPattern finds a Markdown inline link or image and its
-	// target.
-	prMarkdownLinkPattern = regexp.MustCompile(`\]\(\s*<?([^)\s>]*)`)
-	// prUserAttachmentPattern matches any token naming GitHub's user-attachments
-	// store, with or without a scheme.
-	prUserAttachmentPattern = regexp.MustCompile(`(?i)[^\s<>"'\x60()\[\]]*user-attachments[^\s<>"'\x60()\[\]]*`)
-	// prURLPattern matches an http(s) URL, parentheses included; a trailing
-	// unbalanced ")" or punctuation is trimmed the way forges' autolinkers do.
-	prURLPattern = regexp.MustCompile(`(?i)\bhttps?://[^\s<>"'\x60\[\]]+`)
+	// target, in the plain form or the angle-bracket form that may hold a space.
+	prMarkdownLinkPattern = regexp.MustCompile(`\]\(\s*(?:<([^>\n]*)>|([^)\s>]*))`)
+	// prReferenceDefinitionPattern finds a Markdown link reference definition
+	// ("[label]: target"), inside a quote or a list item too, with the target on
+	// the same line or the next and in the plain or the angle-bracket form.
+	prReferenceDefinitionPattern = regexp.MustCompile(`(?m)^(?:[ \t]*(?:>|[-*+]|[0-9]+[.)]))*[ \t]*\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?(?:<([^>\n]*)>|([^\s<]\S*))`)
+	// prAttachmentTokenPattern matches any token naming a forge's attachment
+	// store, with or without a scheme; prMediaTargetKind decides whether it is
+	// one.
+	prAttachmentTokenPattern = regexp.MustCompile(`(?i)[^\s<>"'\x60()\[\]]*attachments[^\s<>"'\x60()\[\]]*`)
+	// prAssetPathPattern matches GitHub's extension-less asset path.
+	prAssetPathPattern = regexp.MustCompile(`(?i)/assets/[0-9]+/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	// prDataURIPattern matches an image or a video written inline as a data
+	// URI.
+	prDataURIPattern = regexp.MustCompile(`(?i)\bdata:(?:image|video)/[^\s<>"'\x60()\[\]]*`)
+	// prURLPattern matches a URL with a scheme or a scheme-less "www." one,
+	// parentheses included; a trailing unbalanced ")" or punctuation is trimmed
+	// the way forges' autolinkers do.
+	prURLPattern = regexp.MustCompile(`(?i)(?:\b[a-z][a-z0-9+.-]*://|\bwww\.)[^\s<>"'\x60\[\]]+`)
 )
 
 // neutralizePRMedia rewrites text so no image or video can render or be linked
 // from it, while keeping it readable: image markdown "![" becomes "!\[", a
 // media element "<img" becomes "<\img" (shown as text), a Markdown or HTML link
-// whose target is an image, a video or a user-attachments asset is broken the
-// same way, and such a URL or HTML attribute target is replaced by a short
-// "(image link removed)"-style note. It is idempotent, so neutralizing a
-// section twice changes nothing.
+// whose target is an image, a video or an attachment is broken the same way, a
+// Markdown reference definition with such a target becomes plain text, and such
+// a URL or HTML attribute target is replaced by a short "(image link
+// removed)"-style note. prMediaTargetKind owns what counts as such a target. It
+// is idempotent, so neutralizing a section twice changes nothing.
 func neutralizePRMedia(text string) string {
 	if text == "" {
 		return text
 	}
 	text = prAnchorTagPattern.ReplaceAllStringFunc(text, func(tag string) string {
-		for _, match := range prHrefPattern.FindAllStringSubmatch(tag, -1) {
-			if isNeutralizedPRLinkTarget(match[1]) {
-				return "<\\" + tag[1:]
-			}
+		broken := false
+		replaceSubmatchFunc(prHrefPattern, tag, func(match string, start, end int) string {
+			broken = broken || prMediaTargetKind(match[start:end]) != ""
+			return match
+		})
+		if broken {
+			return "<\\" + tag[1:]
 		}
 		return tag
 	})
-	text = replaceSubmatchFunc(prMarkdownLinkPattern, text, func(match string, target string) string {
-		if !isNeutralizedPRLinkTarget(target) {
+	text = replaceSubmatchFunc(prMarkdownLinkPattern, text, func(match string, start, end int) string {
+		if prMediaTargetKind(match[start:end]) == "" {
 			return match
 		}
 		return "]\\" + match[1:]
 	})
-	text = replaceSubmatchFunc(prLinkAttributePattern, text, func(match string, target string) string {
-		if !isNeutralizedPRLinkTarget(target) {
+	text = replaceSubmatchFunc(prReferenceDefinitionPattern, text, func(match string, start, end int) string {
+		kind := prMediaTargetKind(match[start:end])
+		if kind == "" {
 			return match
 		}
-		return strings.TrimSuffix(match, target) + mediaLinkNote(target)
+		bracket := strings.IndexByte(match, '[')
+		return match[:bracket] + "\\" + match[bracket:start] + mediaLinkNote(kind) + match[end:]
 	})
-	text = prUserAttachmentPattern.ReplaceAllString(text, "(attachment link removed)")
+	text = replaceSubmatchFunc(prLinkAttributePattern, text, func(match string, start, end int) string {
+		kind := prMediaTargetKind(match[start:end])
+		if kind == "" {
+			return match
+		}
+		return match[:start] + mediaLinkNote(kind) + match[end:]
+	})
+	text = prAttachmentTokenPattern.ReplaceAllStringFunc(text, func(token string) string {
+		if prMediaTargetKind(token) != prMediaAttachment {
+			return token
+		}
+		return mediaLinkNote(prMediaAttachment)
+	})
+	text = prDataURIPattern.ReplaceAllStringFunc(text, func(raw string) string {
+		return mediaLinkNote(prMediaTargetKind(raw))
+	})
 	text = prURLPattern.ReplaceAllStringFunc(text, func(raw string) string {
 		link, tail := trimURLTail(raw)
-		if !evidence.IsMedia("", link) {
+		kind := prMediaTargetKind(link)
+		if kind == "" {
 			return raw
 		}
-		return mediaLinkNote(link) + tail
+		return mediaLinkNote(kind) + tail
 	})
 	text = strings.ReplaceAll(text, "![", "!\\[")
-	return prMediaTagPattern.ReplaceAllStringFunc(text, func(tag string) string {
+	return evidence.MediaTagPattern.ReplaceAllStringFunc(text, func(tag string) string {
 		return "<\\" + tag[1:]
 	})
 }
 
-func mediaLinkNote(target string) string {
-	switch {
-	case strings.Contains(strings.ToLower(target), "user-attachments"):
-		return "(attachment link removed)"
-	case evidence.IsVideo("", target):
-		return "(video link removed)"
-	default:
-		return "(image link removed)"
+const (
+	prMediaAttachment = "attachment"
+	prMediaVideo      = "video"
+	prMediaImage      = "image"
+)
+
+func mediaLinkNote(kind string) string {
+	return "(" + kind + " link removed)"
+}
+
+// prMediaTargetKind classifies a link target as an attachment, a video or an
+// image (by its extension, or as an inline data URI), or "" for anything else. It is the one owner of that decision for
+// every link form neutralizePRMedia reads. A forge resolves a target after
+// decoding character references and percent-encoding, so the target is read as
+// written and in both decoded forms, and a value holding several targets or a
+// space (a srcset, a quoted path) is read whole and field by field.
+func prMediaTargetKind(target string) string {
+	forms := []string{target}
+	decoded := html.UnescapeString(target)
+	if decoded != target {
+		forms = append(forms, decoded)
 	}
+	if unescaped, err := url.PathUnescape(decoded); err == nil && unescaped != decoded {
+		forms = append(forms, unescaped)
+	}
+	kind := ""
+	for _, form := range forms {
+		fields := strings.FieldsFunc(form, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+		for _, candidate := range append([]string{form}, fields...) {
+			lower := strings.ToLower(strings.TrimSpace(candidate))
+			switch {
+			case isPRAttachmentTarget(lower):
+				return prMediaAttachment
+			case evidence.IsVideo("", candidate), strings.HasPrefix(lower, "data:video/"):
+				kind = prMediaVideo
+			case kind != "":
+			case evidence.IsImage("", candidate), strings.HasPrefix(lower, "data:image/"):
+				kind = prMediaImage
+			}
+		}
+	}
+	return kind
 }
 
-func isNeutralizedPRLinkTarget(target string) bool {
-	return evidence.IsMedia("", target) || strings.Contains(strings.ToLower(target), "user-attachments")
+// isPRAttachmentTarget reports whether target names a file a forge stores for
+// a pull request or an issue: those URLs carry no file extension, or one that
+// says nothing about what the file shows.
+func isPRAttachmentTarget(target string) bool {
+	lower := strings.ToLower(target)
+	return strings.Contains(lower, "user-attachments") ||
+		strings.Contains(lower, "user-images.githubusercontent.com") ||
+		prAssetPathPattern.MatchString(lower)
 }
 
-// replaceSubmatchFunc is ReplaceAllStringFunc with the first submatch passed
-// alongside the whole match.
-func replaceSubmatchFunc(pattern *regexp.Regexp, text string, fn func(match, submatch string) string) string {
+// replaceSubmatchFunc is ReplaceAllStringFunc with the bounds, inside the
+// match, of the first submatch that took part passed alongside the whole match.
+func replaceSubmatchFunc(pattern *regexp.Regexp, text string, fn func(match string, start, end int) string) string {
 	var b strings.Builder
 	last := 0
 	for _, idx := range pattern.FindAllStringSubmatchIndex(text, -1) {
+		start, end := 0, 0
+		for g := 2; g+1 < len(idx); g += 2 {
+			if idx[g] >= 0 {
+				start, end = idx[g]-idx[0], idx[g+1]-idx[0]
+				break
+			}
+		}
 		b.WriteString(text[last:idx[0]])
-		b.WriteString(fn(text[idx[0]:idx[1]], text[idx[2]:idx[3]]))
+		b.WriteString(fn(text[idx[0]:idx[1]], start, end))
 		last = idx[1]
 	}
 	b.WriteString(text[last:])

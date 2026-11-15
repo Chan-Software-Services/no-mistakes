@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"bytes"
+	"io"
 	"path"
 	"regexp"
 	"strings"
@@ -48,6 +49,13 @@ var (
 // type is skipped before its size is even looked at.
 func HasPublishableTextType(name string) bool {
 	return publishableTextExtensions[strings.ToLower(path.Ext(strings.TrimSpace(name)))]
+}
+
+// HasInlineMedia reports whether the text read from r carries an image or a
+// video inside it (inlineMediaPattern). It reads r as a stream, so a caller can
+// check a file of any size without holding it.
+func HasInlineMedia(r io.RuneReader) bool {
+	return inlineMediaPattern.MatchReader(r)
 }
 
 // IsPublishableText reports whether the file called name holding data may be
