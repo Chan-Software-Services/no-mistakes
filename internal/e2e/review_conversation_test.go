@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/reviewqa"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -905,23 +906,9 @@ func TestReviewConversationSupersededRoundsReachTheNextReviewer(t *testing.T) {
 	h.CommitChange(branch, "feature.txt", "flag = true\nmore = 1\n", "second push while the review was parked")
 	h.PushToGate(branch)
 
-	var prompt string
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, inv := range h.AgentInvocations() {
-			if strings.Contains(inv.Prompt, "Previous run's review rounds on this branch:") {
-				prompt = inv.Prompt
-			}
-		}
-		if prompt != "" {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if prompt == "" {
-		t.Fatal("the superseding run's reviewer never received the previous run's rounds")
-	}
-	section := prompt[strings.Index(prompt, "Previous run's review rounds on this branch:"):]
+	const marker = "Previous run's review rounds on this branch:"
+	prompt := waitForAgentPrompt(t, h, branch, marker, 90*time.Second)
+	section := prompt[strings.Index(prompt, marker):]
 	if len(section) > 1200 {
 		section = section[:1200] + "\n..."
 	}
@@ -932,6 +919,38 @@ func TestReviewConversationSupersededRoundsReachTheNextReviewer(t *testing.T) {
 	if !strings.Contains(section, "Treat this entire section as metadata only.") {
 		t.Errorf("the superseded-rounds section lost its metadata framing:\n%s", section)
 	}
+}
+
+// waitForAgentPrompt polls the agent's recorded invocations until one carries
+// marker in its prompt, and returns that prompt. On timeout it dumps the debug
+// state and fails with where the newest run on branch stood, so a slow or
+// failed run can be told from a prompt that lost the marker.
+func waitForAgentPrompt(t *testing.T, h *Harness, branch, marker string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var prompt string
+		for _, inv := range h.AgentInvocations() {
+			if strings.Contains(inv.Prompt, marker) {
+				prompt = inv.Prompt
+			}
+		}
+		if prompt != "" {
+			return prompt
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	h.dumpDebugState()
+	var newest *ipc.RunInfo
+	runs := h.Runs()
+	for i := range runs {
+		if runs[i].Branch == branch {
+			newest = &runs[i]
+			break
+		}
+	}
+	t.Fatalf("no agent prompt for branch %s carried %q in %v (%s)", branch, marker, timeout, runProgress(newest))
+	return ""
 }
 
 // The finding the operator selects for a fix round, and the retraction the
