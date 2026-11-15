@@ -649,8 +649,12 @@ func runProgress(run *ipc.RunInfo) string {
 	if run == nil {
 		return "no run seen"
 	}
+	status := fmt.Sprintf("run status=%s", run.Status)
+	if run.Error != nil && *run.Error != "" {
+		status += fmt.Sprintf(" error=%q", *run.Error)
+	}
 	if len(run.Steps) == 0 {
-		return fmt.Sprintf("run status=%s, no steps recorded", run.Status)
+		return status + ", no steps recorded"
 	}
 	var stopped *ipc.StepResultInfo
 	for i := range run.Steps {
@@ -663,9 +667,9 @@ func runProgress(run *ipc.RunInfo) string {
 		}
 	}
 	if stopped == nil {
-		return fmt.Sprintf("run status=%s, every step finished", run.Status)
+		return status + ", every step finished"
 	}
-	return fmt.Sprintf("run status=%s, stopped at step %s status=%s", run.Status, stopped.StepName, stopped.Status)
+	return fmt.Sprintf("%s, stopped at step %s status=%s", status, stopped.StepName, stopped.Status)
 }
 
 // dumpDebugState writes the daemon log, agent log, and per-step run
@@ -677,7 +681,7 @@ func (h *Harness) dumpDebugState() {
 		filepath.Join(h.NMHome, "daemon.log"),
 	} {
 		if data, err := os.ReadFile(candidate); err == nil && len(data) > 0 {
-			h.t.Logf("--- %s (last 8KB) ---\n%s", candidate, tailBytes(data, 8192))
+			h.t.Logf("--- %s (last 8KB, without the waits' own polls) ---\n%s", candidate, tailBytes(dropPollLines(data), 8192))
 		}
 	}
 	if data, err := os.ReadFile(h.AgentLog); err == nil {
@@ -693,6 +697,20 @@ func (h *Harness) dumpDebugState() {
 		}
 		return nil
 	})
+}
+
+// dropPollLines removes the daemon's DEBUG line for each get_runs and get_run
+// request. A wait polls several times a second, so those lines alone filled
+// the tail a timed-out wait dumps and pushed out what the daemon did.
+func dropPollLines(data []byte) []byte {
+	var out []byte
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		if bytes.Contains(line, []byte(`msg="ipc request" method=get_run`)) {
+			continue
+		}
+		out = append(out, line...)
+	}
+	return out
 }
 
 func tailBytes(data []byte, n int) []byte {

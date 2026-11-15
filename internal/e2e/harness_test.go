@@ -174,6 +174,7 @@ func TestRunProgressNamesTheStepTheRunStoppedAt(t *testing.T) {
 	step := func(order int, name types.StepName, status types.StepStatus) ipc.StepResultInfo {
 		return ipc.StepResultInfo{StepName: name, StepOrder: order, Status: status}
 	}
+	failure := "worktree add: exit status 128"
 	for _, tc := range []struct {
 		name string
 		run  *ipc.RunInfo
@@ -210,6 +211,11 @@ func TestRunProgressNamesTheStepTheRunStoppedAt(t *testing.T) {
 			run:  &ipc.RunInfo{Status: types.RunPending},
 			want: "run status=pending, no steps recorded",
 		},
+		{
+			name: "a failed run carries its error",
+			run:  &ipc.RunInfo{Status: types.RunFailed, Error: &failure},
+			want: `run status=failed error="worktree add: exit status 128", no steps recorded`,
+		},
 		{name: "no run", run: nil, want: "no run seen"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,4 +248,18 @@ func TestRemoveBuiltBinariesDeletesTheBuildDir(t *testing.T) {
 
 	// Nothing was built: nothing to remove, and nothing else is touched.
 	removeBuiltBinaries()
+}
+
+func TestDropPollLinesKeepsWhatTheDaemonDid(t *testing.T) {
+	log := "level=INFO msg=\"run started\" run=r1\n" +
+		"level=DEBUG msg=\"ipc request\" method=get_runs\n" +
+		"level=DEBUG msg=\"ipc request\" method=get_run\n" +
+		"level=INFO msg=\"ipc request\" method=respond\n" +
+		"level=WARN msg=\"run failed\" run=r1"
+	want := "level=INFO msg=\"run started\" run=r1\n" +
+		"level=INFO msg=\"ipc request\" method=respond\n" +
+		"level=WARN msg=\"run failed\" run=r1"
+	if got := string(dropPollLines([]byte(log))); got != want {
+		t.Fatalf("dropPollLines =\n%s\nwant\n%s", got, want)
+	}
 }
