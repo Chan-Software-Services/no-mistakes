@@ -33,9 +33,9 @@ func launchedDaemonPIDs(log string) []int {
 }
 
 // daemonsOutlivingTest returns the daemons this harness's own logs say it
-// launched that running still reports once grace has passed. It looks at
-// those pids and no other process.
-func (h *Harness) daemonsOutlivingTest(running func(pid int) bool, grace time.Duration) []int {
+// launched that running still reports after asking up to polls times, with
+// pause between two asks. It looks at those pids and no other process.
+func (h *Harness) daemonsOutlivingTest(running func(pid int) bool, polls int, pause time.Duration) []int {
 	var logs string
 	for _, name := range []string{"cli.log", "daemon.log"} {
 		data, err := os.ReadFile(filepath.Join(h.NMHome, "logs", name))
@@ -43,20 +43,19 @@ func (h *Harness) daemonsOutlivingTest(running func(pid int) bool, grace time.Du
 			logs += string(data) + "\n"
 		}
 	}
-	pids := launchedDaemonPIDs(logs)
-	deadline := time.Now().Add(grace)
-	for {
-		var left []int
-		for _, pid := range pids {
+	left := launchedDaemonPIDs(logs)
+	for poll := 1; ; poll++ {
+		var still []int
+		for _, pid := range left {
 			if running(pid) {
-				left = append(left, pid)
+				still = append(still, pid)
 			}
 		}
-		if len(left) == 0 || !time.Now().Before(deadline) {
+		left = still
+		if len(left) == 0 || poll >= polls {
 			return left
 		}
-		pids = left
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(pause)
 	}
 }
 
@@ -74,7 +73,7 @@ func (h *Harness) daemonStillRuns(pid int) bool {
 // so each such test would eat the temp filesystem a little more. It is a
 // test cleanup, registered before shutdown so it runs after it.
 func (h *Harness) checkLaunchedDaemonsExited() {
-	for _, pid := range h.daemonsOutlivingTest(h.daemonStillRuns, 5*time.Second) {
+	for _, pid := range h.daemonsOutlivingTest(h.daemonStillRuns, 100, 50*time.Millisecond) {
 		h.t.Errorf("daemon pid %d, which this test launched for %s, still runs after the test stopped its daemon", pid, h.NMHome)
 	}
 }

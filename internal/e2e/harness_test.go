@@ -398,7 +398,7 @@ func TestDaemonsOutlivingTestNamesTheLaunchedDaemonThatStillRuns(t *testing.T) {
 	}
 	h := &Harness{NMHome: home}
 
-	// 101 has exited, 102 exits during the grace, 103 never does.
+	// 101 has exited, 102 is gone at the third ask, 103 never goes.
 	polls := map[int]int{}
 	running := func(pid int) bool {
 		polls[pid]++
@@ -410,15 +410,18 @@ func TestDaemonsOutlivingTestNamesTheLaunchedDaemonThatStillRuns(t *testing.T) {
 		}
 		return false
 	}
-	got := h.daemonsOutlivingTest(running, 200*time.Millisecond)
+	got := h.daemonsOutlivingTest(running, 5, 0)
 	if len(got) != 1 || got[0] != 103 {
 		t.Fatalf("daemonsOutlivingTest = %v, want [103]", got)
+	}
+	if polls[103] != 5 {
+		t.Fatalf("asked about the daemon that never exits %d times, want all 5", polls[103])
 	}
 }
 
 func TestDaemonsOutlivingTestIsEmptyWhenNoDaemonWasLaunched(t *testing.T) {
 	h := &Harness{NMHome: t.TempDir()}
-	if got := h.daemonsOutlivingTest(func(int) bool { return true }, time.Millisecond); len(got) != 0 {
+	if got := h.daemonsOutlivingTest(func(int) bool { return true }, 5, 0); len(got) != 0 {
 		t.Fatalf("daemonsOutlivingTest = %v, want none", got)
 	}
 }

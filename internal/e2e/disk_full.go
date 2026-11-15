@@ -101,8 +101,9 @@ func (h *Harness) diskFullSignInLogs() (source, sign string) {
 }
 
 // reportDiskFull adds the full-disk report to a test that already failed.
-// It is a test cleanup, registered last so it reads the logs before the
-// harness's temp state is removed.
+// It is a test cleanup, registered as soon as the harness exists: after the
+// cleanup that removes the temp root, so it reads the logs before they go,
+// and before every other one, so it runs once they have all had their say.
 func (h *Harness) reportDiskFull() {
 	if !h.t.Failed() {
 		return

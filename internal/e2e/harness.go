@@ -130,6 +130,10 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 		globalConfigExtra: opts.GlobalConfigExtra,
 		autoFix:           opts.AutoFix,
 	}
+	// Registered before anything below can fail, and so run after every
+	// later cleanup: a full disk that fails this setup, or a failure the
+	// daemon-exit check adds, still gets the report.
+	t.Cleanup(h.reportDiskFull)
 
 	for _, dir := range []string{h.BinDir, h.NMHome, h.HomeDir, h.WorkDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -202,7 +206,6 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 
 	t.Cleanup(h.checkLaunchedDaemonsExited)
 	t.Cleanup(h.shutdown)
-	t.Cleanup(h.reportDiskFull)
 	return h
 }
 

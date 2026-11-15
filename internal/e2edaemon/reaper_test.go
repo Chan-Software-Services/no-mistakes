@@ -540,12 +540,37 @@ func TestReapOrphaned_LeavesAnotherLiveOwnersEntry(t *testing.T) {
 		}
 	}
 
+	// A live pid that is no longer the process that registered: the system
+	// gave a dead owner's pid to something else.
+	reusedHome := filepath.Join(lab, "nm-e2e-pid-reused", "nmhome")
+	if err := os.MkdirAll(reusedHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.Register("pid-reused", reusedHome, "", 0, os.Getppid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.withLock(func(file *inventoryFile) error {
+		for i := range file.Entries {
+			switch file.Entries[i].ID {
+			case "other-live":
+				if file.Entries[i].OwnerHash == "" {
+					t.Fatalf("Register recorded no owner hash for a live owner")
+				}
+			case "pid-reused":
+				file.Entries[i].OwnerHash = processHash("the test process that died")
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	result := inv.ReapOrphaned()
 	if len(result.Errors) > 0 {
 		t.Fatalf("reap errors: %v", result.Errors)
 	}
-	if result.Entries != 3 {
-		t.Fatalf("reaped %d entries, want the 3 no live process but this one owns", result.Entries)
+	if result.Entries != 4 {
+		t.Fatalf("reaped %d entries, want the 4 no live owner but this process holds", result.Entries)
 	}
 	list, err := inv.List()
 	if err != nil {

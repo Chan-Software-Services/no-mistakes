@@ -35,6 +35,11 @@ func (inv *Inventory) ReapAll() ReapResult {
 // one, and when that cannot be told. Two `go test` runs of the e2e package
 // with no suite wrapper share the default inventory, so a ReapAll at the
 // start or end of one stopped the daemons the other was still using.
+//
+// A live pid counts as the owner only while its command line still hashes to
+// the entry's OwnerHash, so a dead owner's pid given to another process does
+// not keep the entry for good. An entry with no OwnerHash is judged by the
+// pid alone.
 func (inv *Inventory) ReapOrphaned() ReapResult {
 	self := os.Getpid()
 	return inv.reap(func(e Entry) bool {
@@ -42,7 +47,20 @@ func (inv *Inventory) ReapOrphaned() ReapResult {
 			return true
 		}
 		alive, err := processAlive(e.OwnerPID)
-		return err == nil && !alive
+		if err != nil {
+			return false
+		}
+		if !alive {
+			return true
+		}
+		if e.OwnerHash == "" {
+			return false
+		}
+		command, err := processCommandLine(e.OwnerPID)
+		if err != nil || command == "" {
+			return false
+		}
+		return processHash(command) != e.OwnerHash
 	})
 }
 
