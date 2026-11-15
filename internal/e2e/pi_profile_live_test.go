@@ -474,8 +474,9 @@ func invocationsForRun(t *testing.T, h *Harness, runID string) []Invocation {
 }
 
 // waitForRunIDTerminal polls until the named run reaches a terminal status.
-// A lookup that fails, as it does while the daemon is unreachable, is polled
-// again, so the wait ends with its own message.
+// Any failed lookup is polled again until the timeout, whether the daemon is
+// unreachable or answers that it does not know the run, so the wait ends with
+// its own message, which carries the last lookup's error.
 func waitForRunIDTerminal(t *testing.T, h *Harness, runID string, timeout time.Duration) *ipc.RunInfo {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
