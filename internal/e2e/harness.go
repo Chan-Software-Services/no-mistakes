@@ -48,6 +48,10 @@ type Harness struct {
 	globalConfigExtra string                 // mirrors SetupOpts.GlobalConfigExtra
 	autoFix           map[types.StepName]int // mirrors SetupOpts.AutoFix
 	daemonOwn         *e2edaemon.Ownership
+
+	diskFullMu     sync.Mutex
+	diskFullSource string // the command that first printed a full-disk sign
+	diskFullSign   string // that sign's line; see noteDiskFull
 }
 
 // SetupOpts controls per-test setup.
@@ -126,6 +130,10 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 		globalConfigExtra: opts.GlobalConfigExtra,
 		autoFix:           opts.AutoFix,
 	}
+	// Registered before anything below can fail, and so run after every
+	// later cleanup: a full disk that fails this setup, or a failure the
+	// daemon-exit check adds, still gets the report.
+	t.Cleanup(h.reportDiskFull)
 
 	for _, dir := range []string{h.BinDir, h.NMHome, h.HomeDir, h.WorkDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -196,6 +204,7 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	}
 	h.daemonOwn = own
 
+	t.Cleanup(h.checkLaunchedDaemonsExited)
 	t.Cleanup(h.shutdown)
 	return h
 }
@@ -320,6 +329,7 @@ func (h *Harness) RunInDirWithEnv(dir string, env map[string]string, args ...str
 	cmd.Env = mergedEnv(os.Environ(), env)
 	out, err := cmd.CombinedOutput()
 	h.syncDaemonOwnership()
+	h.noteDiskFull("no-mistakes "+strings.Join(args, " "), string(out))
 	return string(out), err
 }
 
@@ -512,17 +522,25 @@ func (h *Harness) Runs() []ipc.RunInfo {
 
 func (h *Harness) RunInfo(runID string) *ipc.RunInfo {
 	h.t.Helper()
+	run, err := h.runInfo(runID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return run
+}
+
+func (h *Harness) runInfo(runID string) (*ipc.RunInfo, error) {
 	p := paths.WithRoot(h.NMHome)
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
-		h.t.Fatalf("dial daemon: %v", err)
+		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
 	defer client.Close()
 	var result ipc.GetRunResult
 	if err := client.Call(ipc.MethodGetRun, &ipc.GetRunParams{RunID: runID}, &result); err != nil {
-		h.t.Fatalf("get run %s: %v", runID, err)
+		return nil, fmt.Errorf("get run %s: %w", runID, err)
 	}
-	return result.Run
+	return result.Run, nil
 }
 
 func (h *Harness) ActiveRun(branch string) *ipc.RunInfo {
@@ -672,6 +690,17 @@ func runProgress(run *ipc.RunInfo) string {
 	return fmt.Sprintf("%s, stopped at step %s status=%s", status, stopped.StepName, stopped.Status)
 }
 
+// runProgressByID is runProgress for a wait that may time out with the daemon
+// unreachable: a failed lookup is reported in place of the run's progress
+// rather than failing the test, which would replace the wait's own message.
+func (h *Harness) runProgressByID(runID string) string {
+	run, err := h.runInfo(runID)
+	if err != nil {
+		return fmt.Sprintf("run not readable: %v", err)
+	}
+	return runProgress(run)
+}
+
 // dumpDebugState writes the daemon log, agent log, and per-step run
 // logs to test output. Called on WaitForRun timeout so a stuck pipeline
 // surfaces the actual failure mode instead of just "stuck running".
@@ -769,7 +798,9 @@ func (h *Harness) runGit(ctx context.Context, dir string, args ...string) ([]byt
 		"GIT_COMMITTER_NAME=E2E Test",
 		"GIT_COMMITTER_EMAIL=e2e@example.com",
 	)
-	return cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	h.noteDiskFull("git "+strings.Join(args, " "), string(out))
+	return out, err
 }
 
 // repoID mirrors gate.repoID(): sha256 of the absolute work path, first
