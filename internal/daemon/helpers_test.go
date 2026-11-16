@@ -17,6 +17,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/logstore"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -300,6 +301,10 @@ func setupTestGitRepo(t *testing.T, p *paths.Paths, d *db.DB, repoID string) (*d
 	// Create bare repo at the expected gate path.
 	bareDir := p.RepoDir(repoID)
 	gitCmd(t, "", "init", "--bare", bareDir)
+	// The receive-pack of the push below and the run's fetches in its
+	// worktrees read this gate's config, so neither starts auto-maintenance
+	// under a test that walks p.Root() afterwards.
+	testgit.TurnOffRepoAutoMaintenance(t, bareDir)
 
 	// Push from work to bare so it has refs.
 	gitCmd(t, workDir, "remote", "add", "gate", bareDir)

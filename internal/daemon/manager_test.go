@@ -20,6 +20,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -472,6 +473,8 @@ func captureGitForgeEnvironment(sctx *pipeline.StepContext) (string, error) {
 func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 	const credentialSentinel = "forge-secret-must-not-persist"
 	t.Setenv("GH_TOKEN", credentialSentinel)
+	trace := testgit.TraceGit(t)
+	testgit.TurnOffAutoMaintenance(t)
 	contexts := make(chan capturedForgeContext, 1)
 	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
 		return []pipeline.Step{&captureForgeContextStep{contexts: contexts}}
@@ -545,6 +548,7 @@ func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	testgit.RequireNoAutoMaintenance(t, trace)
 }
 
 func TestPushReceivedKeepsConcurrentForgeProfilesIsolated(t *testing.T) {
