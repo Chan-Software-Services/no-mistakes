@@ -35,9 +35,6 @@ type rerunErrMsg struct {
 
 type spinnerTickMsg struct{}
 
-// titleSetMsg confirms that the terminal title sent last has been set.
-type titleSetMsg struct{}
-
 type syncRefreshedMsg struct{ state branchsync.State }
 type syncAppliedMsg struct{ state branchsync.State }
 

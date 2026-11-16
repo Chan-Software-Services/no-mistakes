@@ -9,6 +9,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -94,13 +95,9 @@ type Model struct {
 	recoverConfirm bool
 	syncRefreshing bool
 
-	// The terminal title is set with bubbletea's window-title command, never
-	// written into the frame: the renderer measures each frame line with
-	// x/ansi, which counts some title sequences as visible columns and cuts
-	// the line short. One title command is in flight at a time, so titles
-	// reach the terminal in order; title is the last one sent.
-	title        string
-	titlePending bool
+	// The terminal title, set with bubbletea's window-title command and
+	// never written into the frame (see package termtitle).
+	title termtitle.Title
 }
 
 // NewModel creates a TUI model for the given run.
@@ -145,10 +142,7 @@ func NewModel(socketPath string, client *ipc.Client, run *ipc.RunInfo) Model {
 			m.stepStartTimes[s.StepName] = time.Unix(*s.StartedAt, 0)
 		}
 	}
-	// Init sends the first title; until its confirmation arrives, later
-	// titles wait.
-	m.title = m.terminalTitle()
-	m.titlePending = true
+	m.title = termtitle.New(m.terminalTitle())
 	return m
 }
 
@@ -212,46 +206,29 @@ func shouldBackfillPipelineSteps(runStatus types.RunStatus, steps []ipc.StepResu
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.subscribeCmd(), setTitleCmd(m.title))
+	return tea.Batch(m.subscribeCmd(), m.title.Init())
 }
 
-// Update handles msg, then sends the terminal title when it has changed.
+// Update handles msg, then sends the terminal title when it has changed:
+// blank once the user quits, and then, once the blank title has landed, it
+// quits.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if _, ok := msg.(titleSetMsg); ok {
-		m.titlePending = false
-		return m.syncTitle(nil)
-	}
-	next, cmd := m.update(msg)
-	return next.(Model).syncTitle(cmd)
-}
-
-// syncTitle sends the title the model's state calls for, blank once the user
-// quits, unless the last title sent is still in flight; its confirmation
-// calls syncTitle again. Once the blank title has landed, it quits.
-func (m Model) syncTitle(cmd tea.Cmd) (Model, tea.Cmd) {
-	if m.titlePending {
-		return m, cmd
+	var cmd tea.Cmd
+	if _, ok := msg.(termtitle.SetMsg); !ok {
+		var next tea.Model
+		next, cmd = m.update(msg)
+		m = next.(Model)
 	}
 	want := ""
 	if !m.quitting {
 		want = m.terminalTitle()
 	}
-	if want != m.title {
-		m.title = want
-		m.titlePending = true
-		return m, tea.Batch(cmd, setTitleCmd(want))
+	var titleCmd tea.Cmd
+	m.title, titleCmd = m.title.Update(msg, want)
+	if m.quitting && m.title.Settled("") {
+		titleCmd = tea.Quit
 	}
-	if m.quitting {
-		return m, tea.Batch(cmd, tea.Quit)
-	}
-	return m, cmd
-}
-
-// setTitleCmd sets the terminal title, then confirms it with titleSetMsg.
-// bubbletea handles the title message before the confirmation, as one
-// sequence sends them in order.
-func setTitleCmd(title string) tea.Cmd {
-	return tea.Sequence(tea.SetWindowTitle(title), func() tea.Msg { return titleSetMsg{} })
+	return m, tea.Batch(cmd, titleCmd)
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -517,7 +494,6 @@ func (m *Model) resetForRun(run *ipc.RunInfo) {
 	fresh.rerunRequestID = m.rerunRequestID
 	fresh.latestVersion = latestVersion
 	fresh.title = m.title
-	fresh.titlePending = m.titlePending
 	*m = fresh
 }
 

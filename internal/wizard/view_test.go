@@ -1,12 +1,16 @@
 package wizard
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle/termtitletest"
 )
 
 var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -137,17 +141,109 @@ func TestView_InlineInputFitsInsideBoxAtMinimumWidth(t *testing.T) {
 	}
 }
 
-func TestView_EmitsTerminalTitleEscapeSequence(t *testing.T) {
-	m := NewModel(baseConfig(&recorder{}))
-	m.width = 80
-	out := m.View()
-	if !strings.HasPrefix(out, "\x1b]2;") {
-		t.Fatalf("expected View output to start with OSC 2 terminal title sequence, got: %q", out[:min(40, len(out))])
+// wizardTitleStates is one model per kind of terminal title, so a test that
+// runs over it covers every title the wizard can set.
+func wizardTitleStates() map[string]func() Model {
+	return map[string]func() Model{
+		"branch input": func() Model { return NewModel(baseConfig(&recorder{})) },
+		"push confirm": func() Model {
+			cfg := baseConfig(&recorder{})
+			cfg.CurrentBranch = "feat/x"
+			cfg.NeedsBranch = false
+			cfg.IsDirty = false
+			return NewModel(cfg)
+		},
+		"attaching": func() Model {
+			m := NewModel(baseConfig(&recorder{}))
+			m.waiting = true
+			return m
+		},
+		"step failed": func() Model {
+			m := NewModel(baseConfig(&recorder{}))
+			m.steps[0].status = statFailed
+			m.steps[0].errMsg = "boom"
+			return m
+		},
+		"complete": func() Model {
+			m := NewModel(baseConfig(&recorder{}))
+			m.success = true
+			m.pushed = true
+			m.targetBranch = "feat/done"
+			return m
+		},
+		"aborted": func() Model {
+			m := NewModel(baseConfig(&recorder{}))
+			m.aborted = true
+			return m
+		},
 	}
-	// Title must end with BEL before the rest of the rendered UI.
-	end := strings.Index(out, "\x07")
-	if end < 0 {
-		t.Fatalf("expected BEL terminator in terminal title sequence, got: %q", out)
+}
+
+// TestView_FirstLineKeepsTheBoxWidthInEveryTitleState measures each frame's
+// lines as bubbletea's renderer does, escape sequences and all. The renderer
+// cuts a line it measures wider than the terminal, and x/ansi counts a title
+// OSC sequence that starts with a check or cross mark as visible columns, so
+// a title written into the frame cut the Setup box's top border short.
+func TestView_FirstLineKeepsTheBoxWidthInEveryTitleState(t *testing.T) {
+	for name, model := range wizardTitleStates() {
+		for _, width := range []int{60, 80, 100} {
+			m := model()
+			m.width = width
+			view := m.View()
+			if strings.Contains(view, "\x1b]") {
+				t.Errorf("%s at %d columns: the frame carries an OSC sequence: %q", name, width, view)
+			}
+			for i, line := range strings.Split(view, "\n") {
+				got := ansi.StringWidth(line)
+				if got > width || (i == 0 && got != width) {
+					t.Errorf("%s at %d columns: line %d measures %d columns: %q", name, width, i, got, line)
+				}
+			}
+		}
+	}
+}
+
+// TestTitle_EveryStateReachesTheTerminal starts each state's model as
+// bubbletea does, and checks that the title it sets last is the state's own.
+func TestTitle_EveryStateReachesTheTerminal(t *testing.T) {
+	for name, model := range wizardTitleStates() {
+		m := model()
+		got := termtitletest.Run(m.title.Init())
+		next, cmd := m.Update(termtitle.SetMsg{})
+		then := termtitletest.Run(cmd)
+		titles := append(got.Titles, then.Titles...)
+		want := next.(Model).terminalTitle()
+		if len(titles) == 0 || titles[len(titles)-1] != want {
+			t.Errorf("%s: titles set %q, want the last to be %q", name, titles, want)
+		}
+	}
+}
+
+func TestTitle_UpdateSetsTheTitleWhenItChanges(t *testing.T) {
+	m := NewModel(baseConfig(&recorder{}))
+	if got := termtitletest.Run(m.Init()); !reflect.DeepEqual(got.Titles, []string{"⏸ Setup Branch - main"}) {
+		t.Fatalf("Init set titles %q", got.Titles)
+	}
+	next, cmd := m.Update(termtitle.SetMsg{})
+	if got := termtitletest.Run(cmd); len(got.Titles) != 0 {
+		t.Fatalf("the confirmation of an unchanged title set titles %q", got.Titles)
+	}
+	m = next.(Model)
+
+	m.steps[0].status = statFailed
+	m.steps[0].errMsg = "boom"
+	next, cmd = m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{"✗ Setup Branch - main"}) || got.Confirmations != 1 {
+		t.Fatalf("a failed step's title: %+v", got)
+	}
+	m = next.(Model)
+
+	// Once the wizard quits, its own quit command owns the title.
+	m.title, _ = m.title.Update(termtitle.SetMsg{}, m.terminalTitle())
+	m.quitting = true
+	m.aborted = true
+	if _, cmd = m.Update(tea.WindowSizeMsg{Width: 80, Height: 30}); cmd != nil {
+		t.Fatalf("a title was sent after the wizard quit: %+v", termtitletest.Run(cmd))
 	}
 }
 

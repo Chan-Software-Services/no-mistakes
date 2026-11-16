@@ -64,7 +64,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "q", "ctrl+c":
-		// Update's syncTitle clears the terminal title, then quits.
+		// Update clears the terminal title, then quits.
 		m.quitting = true
 		return m, nil
 

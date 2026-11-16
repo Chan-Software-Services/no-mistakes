@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle/termtitletest"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -343,54 +344,19 @@ func TestView_FirstLineKeepsTheTerminalWidthInEveryTitleState(t *testing.T) {
 	}
 }
 
-// runTitleCmds runs cmd the way bubbletea does, in order within a sequence,
-// and returns the window titles it sets, how many title confirmations it
-// sends back, and whether it quits. Any other message is dropped.
-func runTitleCmds(t *testing.T, cmd tea.Cmd) (titles []string, confirmations int, quit bool) {
-	t.Helper()
-	if cmd == nil {
-		return nil, 0, false
-	}
-	msg := cmd()
-	switch msg := msg.(type) {
-	case tea.BatchMsg:
-		for _, c := range msg {
-			ts, n, q := runTitleCmds(t, c)
-			titles, confirmations, quit = append(titles, ts...), confirmations+n, quit || q
-		}
-		return titles, confirmations, quit
-	case titleSetMsg:
-		return nil, 1, false
-	case tea.QuitMsg:
-		return nil, 0, true
-	}
-	switch fmt.Sprintf("%T", msg) {
-	case "tea.sequenceMsg":
-		seq := reflect.ValueOf(msg)
-		for i := 0; i < seq.Len(); i++ {
-			c, _ := seq.Index(i).Interface().(tea.Cmd)
-			ts, n, q := runTitleCmds(t, c)
-			titles, confirmations, quit = append(titles, ts...), confirmations+n, quit || q
-		}
-	case "tea.setWindowTitleMsg":
-		titles = append(titles, fmt.Sprint(msg))
-	}
-	return titles, confirmations, quit
-}
-
 // startedModel runs Init's title command and delivers its confirmation, as
 // bubbletea does when the program starts, and returns the title Init set.
 func startedModel(t *testing.T, m Model) (Model, string) {
 	t.Helper()
-	titles, confirmations, _ := runTitleCmds(t, m.Init())
-	if len(titles) != 1 || confirmations != 1 {
-		t.Fatalf("Init set titles %q with %d confirmations, want one title and one confirmation", titles, confirmations)
+	got := termtitletest.Run(m.Init())
+	if len(got.Titles) != 1 || got.Confirmations != 1 {
+		t.Fatalf("Init did %+v, want one title and its confirmation", got)
 	}
-	next, cmd := m.Update(titleSetMsg{})
-	if titles, _, _ := runTitleCmds(t, cmd); len(titles) != 0 {
+	next, cmd := m.Update(termtitle.SetMsg{})
+	if titles := termtitletest.Run(cmd).Titles; len(titles) != 0 {
 		t.Fatalf("the confirmation of an unchanged title set titles %q", titles)
 	}
-	return next.(Model), titles[0]
+	return next.(Model), got.Titles[0]
 }
 
 func TestInit_SetsTheTitleOfEveryState(t *testing.T) {
@@ -413,38 +379,35 @@ func TestUpdate_SetsTheTitleWhenItChanges(t *testing.T) {
 
 	// A message that leaves the title as it is sets no title.
 	next, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	if titles, _, _ := runTitleCmds(t, cmd); len(titles) != 0 {
+	if titles := termtitletest.Run(cmd).Titles; len(titles) != 0 {
 		t.Fatalf("an unchanged title was set again: %q", titles)
 	}
 	m = next.(Model)
 
 	// The spinner's next frame changes the title.
 	next, cmd = m.Update(spinnerTickMsg{})
-	titles, confirmations, _ := runTitleCmds(t, cmd)
-	if len(titles) != 1 || titles[0] != "⠙ Review - feature/foo" || confirmations != 1 {
-		t.Fatalf("spinner tick set titles %q with %d confirmations", titles, confirmations)
+	if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{"⠙ Review - feature/foo"}) || got.Confirmations != 1 {
+		t.Fatalf("spinner tick did %+v, want the next frame's title and its confirmation", got)
 	}
 	m = next.(Model)
 
-	// Until that title is confirmed, a later change waits, so titles reach
-	// the terminal one at a time and in order.
+	// Until that title is confirmed, a later change waits.
 	next, cmd = m.Update(eventMsg{subscriptionID: m.subscriptionID, event: ipc.Event{
 		Type: ipc.EventRunCompleted, RunID: run.ID, Status: ptr(string(types.RunCompleted)), StateRev: 2,
 	}})
-	if titles, _, _ := runTitleCmds(t, cmd); len(titles) != 0 {
+	if titles := termtitletest.Run(cmd).Titles; len(titles) != 0 {
 		t.Fatalf("a title was set while another was in flight: %q", titles)
 	}
 	m = next.(Model)
 
 	// The confirmation sends the latest title.
-	next, cmd = m.Update(titleSetMsg{})
-	titles, confirmations, _ = runTitleCmds(t, cmd)
-	if len(titles) != 1 || titles[0] != "✓ Completed - feature/foo" || confirmations != 1 {
-		t.Fatalf("the confirmation set titles %q with %d confirmations, want the completed title", titles, confirmations)
+	next, cmd = m.Update(termtitle.SetMsg{})
+	if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{"✓ Completed - feature/foo"}) || got.Confirmations != 1 {
+		t.Fatalf("the confirmation did %+v, want the completed title and its confirmation", got)
 	}
 	m = next.(Model)
-	next, cmd = m.Update(titleSetMsg{})
-	if titles, _, _ := runTitleCmds(t, cmd); len(titles) != 0 {
+	next, cmd = m.Update(termtitle.SetMsg{})
+	if titles := termtitletest.Run(cmd).Titles; len(titles) != 0 {
 		t.Fatalf("the confirmation of the latest title set titles %q", titles)
 	}
 }
@@ -459,17 +422,15 @@ func TestQuit_ClearsTheTitleBeforeItQuits(t *testing.T) {
 			msg = tea.KeyMsg{Type: tea.KeyCtrlC}
 		}
 		next, cmd := m.Update(msg)
-		titles, confirmations, quit := runTitleCmds(t, cmd)
-		if len(titles) != 1 || titles[0] != "" || confirmations != 1 || quit {
-			t.Fatalf("%s: set titles %q with %d confirmations, quit=%v; want the title cleared and no quit before it lands", key, titles, confirmations, quit)
+		if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{""}) || got.Confirmations != 1 || got.Quit {
+			t.Fatalf("%s: did %+v; want the title cleared and no quit before it lands", key, got)
 		}
 		if view := next.(Model).View(); view != "" {
 			t.Errorf("%s: quitting view = %q, want empty", key, view)
 		}
-		_, cmd = next.(Model).Update(titleSetMsg{})
-		titles, _, quit = runTitleCmds(t, cmd)
-		if len(titles) != 0 || !quit {
-			t.Fatalf("%s: once the blank title lands: titles %q, quit=%v; want a quit and no title", key, titles, quit)
+		_, cmd = next.(Model).Update(termtitle.SetMsg{})
+		if got := termtitletest.Run(cmd); len(got.Titles) != 0 || !got.Quit {
+			t.Fatalf("%s: once the blank title lands: %+v; want a quit and no title", key, got)
 		}
 	}
 }
@@ -480,16 +441,15 @@ func TestQuit_WaitsForATitleInFlight(t *testing.T) {
 	m, _ := startedModel(t, NewModel("", nil, run))
 	next, _ := m.Update(spinnerTickMsg{}) // a title is now in flight
 	next, cmd := next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
-	if titles, _, quit := runTitleCmds(t, cmd); len(titles) != 0 || quit {
-		t.Fatalf("quit with a title in flight: titles %q, quit=%v; want it to wait", titles, quit)
+	if got := termtitletest.Run(cmd); len(got.Titles) != 0 || got.Quit {
+		t.Fatalf("quit with a title in flight did %+v; want it to wait", got)
 	}
-	next, cmd = next.(Model).Update(titleSetMsg{})
-	titles, confirmations, quit := runTitleCmds(t, cmd)
-	if len(titles) != 1 || titles[0] != "" || confirmations != 1 || quit {
-		t.Fatalf("after the in-flight title: titles %q with %d confirmations, quit=%v; want the blank title", titles, confirmations, quit)
+	next, cmd = next.(Model).Update(termtitle.SetMsg{})
+	if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{""}) || got.Confirmations != 1 || got.Quit {
+		t.Fatalf("after the in-flight title: %+v; want the blank title", got)
 	}
-	_, cmd = next.(Model).Update(titleSetMsg{})
-	if _, _, quit := runTitleCmds(t, cmd); !quit {
+	_, cmd = next.(Model).Update(termtitle.SetMsg{})
+	if !termtitletest.Run(cmd).Quit {
 		t.Fatal("no quit once the blank title landed")
 	}
 }
