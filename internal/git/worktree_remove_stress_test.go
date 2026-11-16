@@ -17,40 +17,52 @@ import (
 )
 
 // TestWorktreeRemoveStressAgainstConcurrentPushes is the reproduction loop for
-// the race WorktreeRemove's ordering closes: pushes to a bare gate repository
+// the races around a gate repository's run worktrees: pushes to a bare gate
 // while its linked worktrees are added and removed, as the daemon does around
-// every run. A push must never fail, whatever the removal is doing, and
-// neither must the daemon's own git commands, which walk the worktrees too.
+// every run. A push must never fail, whatever an add or a removal is doing,
+// and neither must the add or the removal itself, which walk the worktrees too.
 //
-// Only the removals overlap the pushes. `git worktree add` has a window of its
-// own, which nothing here closes: it creates the new entry's commondir empty
-// and then writes it, and a reader in between dies with "failed to read
-// worktrees/<id>/commondir: Success". Left in, that window fails this loop
-// whatever the removal does, so an add waits for the pushes in flight and
-// holds new ones back, and adds do not overlap each other. A removal follows
-// its add after a random pause of up to 100ms.
+// Adds overlap pushes, removals and each other. Each remover adds a worktree,
+// pauses for up to 100ms, so the removal lands at no particular point of a
+// push, and removes it. Every failure fails the loop, and the summary counts
+// each by what failed and what it died on:
 //
-// One failure of an add is counted and not failed on, for the same reason:
-// "could not open" a file of its own new entry for writing. The maintenance
-// git runs after a push prunes worktrees, and a prune that finds the entry
-// `git worktree add` has just made, before the add locked it, deletes it. With
-// `maintenance.auto=false` in NM_WORKTREE_REMOVE_STRESS_GATE_CONFIG it does
-// not happen.
+//   - a pruned add, one that "could not open" a file of its own new entry: the
+//     `git maintenance run --auto` git runs after a push pruned the entry
+//     before the add had locked it (with `maintenance.auto=false` in
+//     NM_WORKTREE_REMOVE_STRESS_GATE_CONFIG it does not happen);
+//   - a reader of the worktrees (a push, an add, a removal) that died reading
+//     the entry of a worktree being added: `git worktree add` lists the entry
+//     before it has written its commondir, and a reader that reads the file
+//     empty dies with "failed to read worktrees/<id>/commondir: <errno>",
+//     where <errno> is whatever error the reader had left behind ("Success",
+//     "Numerical result out of range", "No such file or directory"), so the
+//     text alone does not tell this window apart;
+//   - a reader that died reading the entry of a worktree being removed, which
+//     `git worktree remove` deletes file by file.
 //
-// The window is a few microseconds wide per push, so the loop only means
-// something at volume. It is skipped unless NM_WORKTREE_REMOVE_STRESS names how
-// long to run (a Go duration, e.g. 2m). Its other settings:
+// A failure is put in the second or third kind when the worktree it names was
+// being added or removed while the failed command ran, and its errno text is
+// kept beside the kind. The failure is logged with what its remover was doing
+// to that worktree and when.
+//
+// The windows are a few microseconds wide per push, so the loop only means
+// something at volume. It is skipped unless NM_WORKTREE_REMOVE_STRESS names
+// how long to run (a Go duration, e.g. 2m). Its other settings:
 //
 //   - NM_WORKTREE_REMOVE_STRESS_PUSHERS: concurrent pushers (default 4).
 //   - NM_WORKTREE_REMOVE_STRESS_REMOVERS: worktrees added and removed at once
 //     (default 1; each live worktree is one more read per push).
+//   - NM_WORKTREE_REMOVE_STRESS_GIT_ADD: when set, add with
+//     `git worktree add --detach`, the creation WorktreeAdd replaced, to see
+//     the loop fail.
 //   - NM_WORKTREE_REMOVE_STRESS_GIT_REMOVE: when set, remove with
 //     `git worktree remove --force`, the removal WorktreeRemove replaced, to
 //     see the loop fail.
 //   - NM_WORKTREE_REMOVE_STRESS_GATE_CONFIG: space-separated key=value git
 //     settings for the gate repository.
 //
-// Starve it to make the window easier to hit, e.g.
+// Starve it to make the windows easier to hit, e.g.
 // `taskset -c 0 env GOMAXPROCS=1 ...`, with TMPDIR on the filesystem to test.
 func TestWorktreeRemoveStressAgainstConcurrentPushes(t *testing.T) {
 	spec := os.Getenv("NM_WORKTREE_REMOVE_STRESS")
@@ -63,6 +75,13 @@ func TestWorktreeRemoveStressAgainstConcurrentPushes(t *testing.T) {
 	}
 	pushers := stressCount(t, "NM_WORKTREE_REMOVE_STRESS_PUSHERS", 4)
 	removers := stressCount(t, "NM_WORKTREE_REMOVE_STRESS_REMOVERS", 1)
+	add := WorktreeAdd
+	if os.Getenv("NM_WORKTREE_REMOVE_STRESS_GIT_ADD") != "" {
+		add = func(ctx context.Context, repoDir, wtPath, rev string) error {
+			_, err := Run(ctx, repoDir, "worktree", "add", "--detach", wtPath, rev)
+			return err
+		}
+	}
 	remove := WorktreeRemove
 	if os.Getenv("NM_WORKTREE_REMOVE_STRESS_GIT_REMOVE") != "" {
 		remove = func(ctx context.Context, repoDir, wtPath string) error {
@@ -88,21 +107,25 @@ func TestWorktreeRemoveStressAgainstConcurrentPushes(t *testing.T) {
 	wtRoot := t.TempDir()
 
 	deadline := time.Now().Add(duration)
-	var pushes, removals, failures, otherReaders, prunedAdds atomic.Int64
-	var failureMu sync.Mutex
-	failureKinds := map[string]int{}
-	// What the removers were doing to each worktree and when, so a failure
-	// that names a worktree can be laid beside it.
+	var pushes, adds, removals atomic.Int64
 	start := time.Now()
-	var history sync.Map
-	mark := func(id, event string) {
-		prev, _ := history.Load(id)
-		line, _ := prev.(string)
-		history.Store(id, line+fmt.Sprintf(" %s@%dus", event, time.Since(start).Microseconds()))
+	now := func() int64 { return time.Since(start).Microseconds() }
+	// What the removers did to each worktree and when, so a failure that
+	// names a worktree can be laid beside it.
+	var historyMu sync.Mutex
+	history := map[string]*stressHistory{}
+	mark := func(at *int64) {
+		historyMu.Lock()
+		*at = now()
+		historyMu.Unlock()
 	}
-	var details []string
-	// Held shared by a push and exclusively by a worktree add.
-	var adding sync.RWMutex
+	var failureMu sync.Mutex
+	var failed []stressFailure
+	fail := func(f stressFailure) {
+		failureMu.Lock()
+		failed = append(failed, f)
+		failureMu.Unlock()
+	}
 	var wg sync.WaitGroup
 
 	for r := 0; r < removers; r++ {
@@ -112,33 +135,24 @@ func TestWorktreeRemoveStressAgainstConcurrentPushes(t *testing.T) {
 			for i := 0; time.Now().Before(deadline); i++ {
 				id := fmt.Sprintf("run-%d-%d", r, i)
 				wt := filepath.Join(wtRoot, id)
-				mark(id, "add")
-				adding.Lock()
-				err := WorktreeAdd(ctx, bare, wt, first)
-				adding.Unlock()
-				mark(id, "added")
+				h := &stressHistory{addEnd: -1, removeStart: -1, removeEnd: -1}
+				historyMu.Lock()
+				history[id] = h
+				historyMu.Unlock()
+				mark(&h.addStart)
+				err := add(ctx, bare, wt, first)
+				mark(&h.addEnd)
 				if err != nil {
-					if strings.Contains(err.Error(), "could not open") && strings.Contains(err.Error(), "/worktrees/"+id+"/") {
-						prunedAdds.Add(1)
-					} else {
-						otherReaders.Add(1)
-					}
-					failureMu.Lock()
-					details = append(details, fmt.Sprintf("worktree add %s at %dus: %v", id, time.Since(start).Microseconds(), lastLine(err.Error())))
-					failureMu.Unlock()
+					fail(stressFailure{what: "worktree add", self: id, began: h.addStart, ended: h.addEnd, out: err.Error()})
 					continue
 				}
-				// Let the pushes the add held back get going, so the removal
-				// lands at no particular point of a push.
+				adds.Add(1)
 				time.Sleep(time.Duration(rand.Int64N(int64(100 * time.Millisecond))))
-				mark(id, "remove")
+				mark(&h.removeStart)
 				err = remove(ctx, bare, wt)
-				mark(id, "removed")
+				mark(&h.removeEnd)
 				if err != nil {
-					otherReaders.Add(1)
-					failureMu.Lock()
-					details = append(details, fmt.Sprintf("worktree remove %s at %dus: %v", id, time.Since(start).Microseconds(), lastLine(err.Error())))
-					failureMu.Unlock()
+					fail(stressFailure{what: "worktree remove", self: id, began: h.removeStart, ended: h.removeEnd, out: err.Error()})
 					continue
 				}
 				removals.Add(1)
@@ -157,44 +171,101 @@ func TestWorktreeRemoveStressAgainstConcurrentPushes(t *testing.T) {
 				}
 				cmd := exec.Command("git", "push", "--force", bare, fmt.Sprintf("%s:refs/heads/pusher-%d", sha, p))
 				cmd.Dir = work
-				adding.RLock()
-				began := time.Since(start).Microseconds()
+				began := now()
 				out, err := cmd.CombinedOutput()
-				adding.RUnlock()
+				ended := now()
 				pushes.Add(1)
 				if err != nil {
-					failures.Add(1)
-					kind := "other"
-					switch {
-					case strings.Contains(string(out), "failed to read worktrees/"):
-						kind = "failed to read worktrees/<id>/commondir"
-					case strings.Contains(string(out), "worktrees/"):
-						kind = "died on a worktree's admin directory"
-					}
-					failureMu.Lock()
-					failureKinds[kind]++
-					details = append(details, fmt.Sprintf("push %dus-%dus: %s", began, time.Since(start).Microseconds(), lastLine(string(out))))
-					failureMu.Unlock()
+					fail(stressFailure{what: "push", began: began, ended: ended, out: string(out)})
 				}
 			}
 		}(p)
 	}
 	wg.Wait()
 
-	named := regexp.MustCompile(`worktrees/(run-\d+-\d+)`)
-	for _, detail := range details {
-		t.Log(detail)
-		if m := named.FindStringSubmatch(detail); m != nil {
-			line, _ := history.Load(m[1])
-			t.Logf("    %s:%v", m[1], line)
+	kinds := map[string]int{}
+	var failedPushes, prunedAdds, otherFailures int
+	for _, f := range failed {
+		kind, named := f.kind(history)
+		kinds[f.what+": "+kind]++
+		switch {
+		case f.what == "push":
+			failedPushes++
+		case kind == stressPrunedAdd:
+			prunedAdds++
+		default:
+			otherFailures++
+		}
+		t.Logf("%s %dus-%dus: %s", f.what, f.began, f.ended, lastLine(f.out))
+		if h := history[named]; h != nil {
+			t.Logf("    %s: %s", named, h)
 		}
 	}
-	t.Logf("%d pushes against %d worktree removals in %v: %d pushes failed %v, %d worktree adds or removals failed, %d worktree adds were pruned while being created",
-		pushes.Load(), removals.Load(), duration, failures.Load(), failureKinds, otherReaders.Load(), prunedAdds.Load())
-	if failures.Load() > 0 || otherReaders.Load() > 0 {
-		t.Fatalf("%d of %d pushes and %d worktree adds or removals failed while worktrees were being removed",
-			failures.Load(), pushes.Load(), otherReaders.Load())
+	t.Logf("%d pushes against %d worktree adds and %d removals in %v: %d pushes failed, %d worktree adds were pruned while being created, %d other worktree adds or removals failed; by kind: %v",
+		pushes.Load(), adds.Load(), removals.Load(), duration, failedPushes, prunedAdds, otherFailures, kinds)
+	if len(failed) > 0 {
+		t.Fatalf("%d of %d pushes failed, %d worktree adds were pruned and %d other worktree adds or removals failed while worktrees were being added and removed",
+			failedPushes, pushes.Load(), prunedAdds, otherFailures)
 	}
+}
+
+// stressHistory is when the stress loop's remover added and removed one
+// worktree, in microseconds since the loop started; -1 is not yet.
+type stressHistory struct {
+	addStart, addEnd, removeStart, removeEnd int64
+}
+
+func (h *stressHistory) String() string {
+	return fmt.Sprintf("add@%dus added@%dus remove@%dus removed@%dus", h.addStart, h.addEnd, h.removeStart, h.removeEnd)
+}
+
+// stressFailure is one failed git command of the stress loop: what it was,
+// the worktree it was adding or removing (none for a push), when it ran, and
+// its output.
+type stressFailure struct {
+	what, self   string
+	began, ended int64
+	out          string
+}
+
+const stressPrunedAdd = "could not open a file of its own new entry (pruned while being created)"
+
+var (
+	stressNamedWorktree = regexp.MustCompile(`worktrees/(run-\d+-\d+)/`)
+	stressCommondirErr  = regexp.MustCompile(`/commondir: ([^\n]*)`)
+)
+
+// kind names what the failure died on, from its output and from what the
+// worktree it names was going through while it ran, and returns that
+// worktree's name.
+func (f stressFailure) kind(history map[string]*stressHistory) (string, string) {
+	m := stressNamedWorktree.FindStringSubmatch(f.out)
+	if m == nil {
+		return "other", ""
+	}
+	named := m[1]
+	if f.what == "worktree add" && named == f.self && strings.Contains(f.out, "could not open") {
+		return stressPrunedAdd, named
+	}
+	reading := "died on a worktree's entry"
+	if c := stressCommondirErr.FindStringSubmatch(f.out); c != nil {
+		reading = "failed to read worktrees/<id>/commondir (" + c[1] + ")"
+	}
+	h := history[named]
+	switch {
+	case h == nil:
+	case overlaps(f.began, f.ended, h.addStart, h.addEnd):
+		return reading + " of a worktree being added", named
+	case overlaps(f.began, f.ended, h.removeStart, h.removeEnd):
+		return reading + " of a worktree being removed", named
+	}
+	return reading + " of a worktree neither being added nor removed", named
+}
+
+// overlaps reports whether [began, ended] meets [from, to], where a from of -1
+// has not begun and a to of -1 has not ended.
+func overlaps(began, ended, from, to int64) bool {
+	return from >= 0 && from <= ended && (to < 0 || began <= to)
 }
 
 // lastLine returns the line of a command's output that names a worktree it
