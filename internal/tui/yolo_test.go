@@ -196,6 +196,63 @@ func TestModel_Yolo_ActsWhenTheReconcileInFlightAtTheKeypressLands(t *testing.T)
 	}
 }
 
+// Yolo checks the gate on every event, and an event can arrive between its
+// response and the step's status change (a log line of the fix it asked for).
+// That check must send nothing: it used to approve the gate yolo had just
+// asked to fix, which the daemon refuses, and the approval it recorded kept
+// yolo from answering the fix review the rereview parks. A gate parked again
+// after the fix is answered, once.
+func TestModel_Yolo_AnswersAGateOnceUntilItsStatusChanges(t *testing.T) {
+	sock, client, snapshot := captureRespond(t)
+	run := testRun()
+	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	run.Steps[0].FindingsJSON = &fj
+	m := NewModel(sock, client, run)
+	review := types.StepReview
+	send := func(msg tea.Msg) {
+		t.Helper()
+		updated, cmd := m.Update(msg)
+		m = updated.(Model)
+		runAll(cmd)
+	}
+	event := func(e ipc.Event) {
+		t.Helper()
+		e.RunID = run.ID
+		e.StepName = &review
+		send(eventMsg{event: e, subscriptionID: m.subscriptionID})
+	}
+	actions := func() []types.ApprovalAction {
+		var got []types.ApprovalAction
+		for _, call := range snapshot() {
+			got = append(got, call.Action)
+		}
+		return got
+	}
+
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix}) {
+		t.Fatalf("yolo's first response = %v, want [fix]", got)
+	}
+
+	line := "asking agent to fix identified issues...\n"
+	event(ipc.Event{Type: ipc.EventLogChunk, Content: &line})
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix}) {
+		t.Fatalf("an event before the fix started answered the gate again: %v, want [fix]", got)
+	}
+
+	event(ipc.Event{Type: ipc.EventStepStarted})
+	fixReview := string(types.StepStatusFixReview)
+	event(ipc.Event{Type: ipc.EventStepCompleted, Status: &fixReview, Findings: &fj})
+	// The fix review's diff lands, and yolo may act on the gate.
+	send(stepDiffMsg{step: review, requestID: m.stepDiffRequestID[review], subscriptionID: m.subscriptionID})
+	send(stepDiffReadyMsg{step: review, requestID: m.stepDiffRequestID[review], subscriptionID: m.subscriptionID})
+	event(ipc.Event{Type: ipc.EventLogChunk, Content: &line})
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix, types.ActionApprove}) {
+		t.Fatalf("yolo's responses through the fix review = %v, want [fix approve]", got)
+	}
+}
+
 // runAll runs a command, and each command of a batch it returns.
 func runAll(cmd tea.Cmd) {
 	if cmd == nil {
