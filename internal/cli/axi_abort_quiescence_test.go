@@ -66,6 +66,41 @@ func newAbortQuiescenceFixtureWithCancel(t *testing.T, getRun func(context.Conte
 		t.Fatal(err)
 	}
 
+	serveFakeAbortDaemon(t, fakeAbortDaemon{
+		active: &ipc.RunInfo{ID: "run-quiesce", Branch: "feature/abort", Status: types.RunRunning},
+		cancel: func() error {
+			for _, cancel := range cancelAfterRequest {
+				cancel()
+			}
+			return cancelErr
+		},
+		getRun: getRun,
+	})
+
+	previousTimeout := abortStateWaitTimeout
+	abortStateWaitTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { abortStateWaitTimeout = previousTimeout })
+
+	chdir(t, local)
+}
+
+// fakeAbortDaemon scripts the daemon calls `axi abort` makes: active is the
+// active run, cancel answers the cancellation (accepted when nil or when it
+// returns nil), and getRun answers each run read, numbered from 1.
+type fakeAbortDaemon struct {
+	active *ipc.RunInfo
+	cancel func() error
+	getRun func(context.Context, int) (*ipc.RunInfo, error)
+}
+
+// serveFakeAbortDaemon serves d on the socket under the test's NM_HOME and
+// fails the test when it does not start.
+func serveFakeAbortDaemon(t *testing.T, d fakeAbortDaemon) {
+	t.Helper()
+	p, err := paths.New()
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv := ipc.NewServer()
 	srv.Handle(ipc.MethodHealth, func(context.Context, json.RawMessage) (interface{}, error) {
 		return &ipc.HealthResult{Status: "ok"}, nil
@@ -74,23 +109,20 @@ func newAbortQuiescenceFixtureWithCancel(t *testing.T, getRun func(context.Conte
 		return &ipc.GateContextResult{Nested: false}, nil
 	})
 	srv.Handle(ipc.MethodGetActiveRun, func(context.Context, json.RawMessage) (interface{}, error) {
-		return &ipc.GetActiveRunResult{Run: &ipc.RunInfo{
-			ID: "run-quiesce", Branch: "feature/abort", Status: types.RunRunning,
-		}}, nil
+		return &ipc.GetActiveRunResult{Run: d.active}, nil
 	})
 	srv.Handle(ipc.MethodCancelRun, func(context.Context, json.RawMessage) (interface{}, error) {
-		for _, cancel := range cancelAfterRequest {
-			cancel()
-		}
-		if cancelErr != nil {
-			return nil, cancelErr
+		if d.cancel != nil {
+			if err := d.cancel(); err != nil {
+				return nil, err
+			}
 		}
 		return &ipc.CancelRunResult{OK: true}, nil
 	})
 	calls := 0
 	srv.Handle(ipc.MethodGetRun, func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
 		calls++
-		run, err := getRun(ctx, calls)
+		run, err := d.getRun(ctx, calls)
 		if err != nil {
 			return nil, err
 		}
@@ -110,16 +142,11 @@ func newAbortQuiescenceFixtureWithCancel(t *testing.T, getRun func(context.Conte
 	for time.Now().Before(deadline) {
 		if client, dialErr := ipc.Dial(p.Socket()); dialErr == nil {
 			client.Close()
-			break
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-
-	previousTimeout := abortStateWaitTimeout
-	abortStateWaitTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { abortStateWaitTimeout = previousTimeout })
-
-	chdir(t, local)
+	t.Fatal("fake daemon did not start")
 }
 
 func runningRunForever(context.Context, int) (*ipc.RunInfo, error) {

@@ -1,0 +1,155 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spf13/cobra"
+
+	"github.com/kunchenguid/no-mistakes/internal/branchsync"
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/kunchenguid/no-mistakes/internal/types"
+)
+
+// The live synchronization check as each reader runs it: an agent surface
+// names the axi form, whose output is TOON, and a person's surface names the
+// human form.
+const (
+	agentCheckSyncCommand = "no-mistakes axi sync --check"
+	humanCheckSyncCommand = "no-mistakes sync --check"
+)
+
+// leaveSubmittedHead amends the operator's commit, so the local head has left
+// the submitted head while the pipeline-pushed head is not in the local
+// object store: the cached state is ambiguous_context at
+// blocked_relation_unknown, whose next action is check_sync.
+func leaveSubmittedHead(t *testing.T, f cliSyncFixture) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.local, "file.txt"), []byte("feature, rewritten\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cliGit(t, f.local, "commit", "-a", "--amend", "-m", "feature, rewritten")
+}
+
+// assertAgentNextAction checks that an agent surface's branch_sync names the
+// next action code with the axi check command, and never the human one.
+func assertAgentNextAction(t *testing.T, surface, out, code string) {
+	t.Helper()
+	for _, want := range []string{"next_action:", "code: " + code, "command: " + agentCheckSyncCommand} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%s missing %q:\n%s", surface, want, out)
+		}
+	}
+	if strings.Contains(out, humanCheckSyncCommand) {
+		t.Errorf("%s names the human command %q, whose output is not TOON:\n%s", surface, humanCheckSyncCommand, out)
+	}
+}
+
+func TestAgentSurfacesNameAxiCheckAtRelationUnknown(t *testing.T) {
+	f := newCLISyncFixture(t)
+	leaveSubmittedHead(t, f)
+
+	out, err := executeCmd("axi", "status")
+	if err != nil {
+		t.Fatalf("axi status: %v\n%s", err, out)
+	}
+	assertAgentNextAction(t, "axi status", out, "check_sync")
+
+	out, err = executeCmd("axi")
+	if err != nil {
+		t.Fatalf("axi home: %v\n%s", err, out)
+	}
+	assertAgentNextAction(t, "axi home", out, "check_sync")
+
+	var drive bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&drive)
+	cmd.SetContext(context.Background())
+	run := &ipc.RunInfo{ID: f.runID, Branch: "feature/sync", Status: types.RunCompleted, HeadSHA: f.pushed}
+	if err := renderDriveResult(cmd, run, false); err != nil {
+		t.Fatalf("drive result: %v\n%s", err, drive.String())
+	}
+	assertAgentNextAction(t, "drive result", drive.String(), "check_sync")
+}
+
+func TestHumanSurfacesKeepHumanCheckAtRelationUnknown(t *testing.T) {
+	f := newCLISyncFixture(t)
+	leaveSubmittedHead(t, f)
+
+	out, err := executeCmd("status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	want := "check it live with `" + humanCheckSyncCommand + "`"
+	if !strings.Contains(out, want) {
+		t.Errorf("human status missing %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "axi sync") {
+		t.Errorf("human status names an axi command:\n%s", out)
+	}
+}
+
+func TestAxiAbortNamesAxiCheckAtRelationUnknown(t *testing.T) {
+	f := newCLISyncFixtureAtHome(t, makeSocketSafeTempDir(t))
+	leaveSubmittedHead(t, f)
+	serveFakeAbortDaemon(t, fakeAbortDaemon{
+		active: &ipc.RunInfo{ID: f.runID, Branch: "feature/sync", Status: types.RunRunning},
+		getRun: func(context.Context, int) (*ipc.RunInfo, error) {
+			return &ipc.RunInfo{ID: f.runID, Branch: "feature/sync", Status: types.RunCancelled}, nil
+		},
+	})
+
+	out, err := executeCmd("axi", "abort")
+	if err != nil {
+		t.Fatalf("axi abort: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "aborted: true") {
+		t.Fatalf("fixture: abort was not confirmed:\n%s", out)
+	}
+	assertAgentNextAction(t, "axi abort", out, "check_sync")
+	if want := "Run `" + agentCheckSyncCommand + "`"; !strings.Contains(out, want) {
+		t.Errorf("axi abort help missing %q:\n%s", want, out)
+	}
+}
+
+func TestAxiSyncCheckNamesAxiCheckWhenOffline(t *testing.T) {
+	f := newCLISyncFixture(t)
+	// The configured push target cannot be reached: its ls-remote fails, so a
+	// live refresh reports blocked_offline with a retry next action.
+	if err := os.Rename(f.remote, f.remote+".unreachable"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := executeCmd("axi", "sync", "--check")
+	if !strings.Contains(out, "state: "+branchsync.StateOffline) || !strings.Contains(out, "safety: blocked_offline") {
+		t.Fatalf("fixture: axi sync --check did not report blocked_offline:\n%s", out)
+	}
+	assertAgentNextAction(t, "axi sync --check", out, "retry")
+	if want := "Run `" + agentCheckSyncCommand + "`"; !strings.Contains(out, want) {
+		t.Errorf("axi sync --check help missing %q:\n%s", want, out)
+	}
+
+	out, _ = executeCmd("axi", "sync")
+	if !strings.Contains(out, "safety: blocked_offline") {
+		t.Fatalf("fixture: axi sync did not report blocked_offline:\n%s", out)
+	}
+	assertAgentNextAction(t, "axi sync", out, "retry")
+	if want := "Run `" + agentCheckSyncCommand + "`"; !strings.Contains(out, want) {
+		t.Errorf("axi sync help missing %q:\n%s", want, out)
+	}
+
+	// At blocked_offline the human output names no command at all, so the
+	// human side holds only as never naming the axi form, once the check has
+	// reached the offline state.
+	out, err := executeCmd("sync", "--check")
+	if err == nil || !strings.Contains(out, "could not refresh the configured push target") {
+		t.Fatalf("fixture: human sync --check did not report the offline refusal (err %v):\n%s", err, out)
+	}
+	if strings.Contains(out, "axi sync") {
+		t.Errorf("human sync --check names an axi command:\n%s", out)
+	}
+}
