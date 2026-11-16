@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -250,6 +251,111 @@ func TestModel_Yolo_AnswersAGateOnceUntilItsStatusChanges(t *testing.T) {
 	event(ipc.Event{Type: ipc.EventLogChunk, Content: &line})
 	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix, types.ActionApprove}) {
 		t.Fatalf("yolo's responses through the fix review = %v, want [fix approve]", got)
+	}
+}
+
+// A response of yolo's own that fails (the socket dropped, the daemon
+// restarted) leaves the gate as it was, so yolo must forget that answer and
+// send the same action again on a retry: turning yolo off and on here. It used
+// to keep the gate marked answered and send nothing more.
+func TestModel_Yolo_RetriesTheSameActionAfterItsResponseFails(t *testing.T) {
+	sock := testSocketPath(t)
+	srv := startTestIPCServer(t, sock)
+	var mu sync.Mutex
+	var calls []ipc.RespondParams
+	srv.Handle(ipc.MethodRespond, func(_ context.Context, raw json.RawMessage) (interface{}, error) {
+		var params ipc.RespondParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, params)
+		if len(calls) == 1 {
+			return nil, errors.New("daemon restarting")
+		}
+		return &ipc.RespondResult{}, nil
+	})
+	client, err := ipc.Dial(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	actions := func() []types.ApprovalAction {
+		mu.Lock()
+		defer mu.Unlock()
+		var got []types.ApprovalAction
+		for _, call := range calls {
+			got = append(got, call.Action)
+		}
+		return got
+	}
+
+	run := testRun()
+	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	run.Steps[0].FindingsJSON = &fj
+	m := NewModel(sock, client, run)
+	press := func() tea.Cmd {
+		t.Helper()
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+		m = updated.(Model)
+		return cmd
+	}
+
+	cmd := press()
+	if cmd == nil {
+		t.Fatal("yolo sent no response to the parked gate")
+	}
+	// The failed response's message goes back through the update loop, as
+	// bubbletea delivers it.
+	updated, _ := m.Update(cmd())
+	m = updated.(Model)
+	if m.err == nil {
+		t.Fatal("the failed response was not shown")
+	}
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix}) {
+		t.Fatalf("yolo's first response = %v, want [fix]", got)
+	}
+
+	press()
+	runAll(press())
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix, types.ActionFix}) {
+		t.Fatalf("yolo's responses after a failed fix and a retry = %v, want [fix fix]", got)
+	}
+}
+
+// A gate that parks again at the same status, seen only through a snapshot
+// (its step_started coalesced away), is a new gate: yolo answers it. Only the
+// snapshot's gate change can clear yolo's answer here, since the step's status
+// never changes on the model.
+func TestModel_Yolo_AnswersAGateParkedAgainSeenOnlyThroughASnapshot(t *testing.T) {
+	sock, client, snapshot := captureRespond(t)
+	run := testRun()
+	run.StateRev = 1
+	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	run.Steps[0].FindingsJSON = &fj
+	m := NewModel(sock, client, run)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	runAll(cmd)
+
+	reparked := testRun()
+	reparked.StateRev = 2
+	reparked.Steps[0].Status = types.StepStatusAwaitingApproval
+	reparked.Steps[0].FixRoundCount = 1
+	reparked.Steps[0].FindingsJSON = &fj
+	_, cmd = m.Update(runReconciledMsg{run: reparked, subscriptionID: m.subscriptionID})
+	runAll(cmd)
+
+	var got []types.ApprovalAction
+	for _, call := range snapshot() {
+		got = append(got, call.Action)
+	}
+	if !slices.Equal(got, []types.ApprovalAction{types.ActionFix, types.ActionApprove}) {
+		t.Fatalf("yolo's responses to a gate parked again = %v, want [fix approve]", got)
 	}
 }
 
