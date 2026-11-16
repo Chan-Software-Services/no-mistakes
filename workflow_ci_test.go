@@ -105,7 +105,8 @@ func TestCIWorkflowTestJobRunsTheRaceSuiteAndBuilds(t *testing.T) {
 }
 
 // Every CI run gets a read-only token: the workflow grants contents: read and
-// nothing else, and no job widens it, since no job writes to GitHub.
+// nothing else, and no job sets its own permissions block, since no job writes
+// to GitHub.
 func TestCIWorkflowTokenIsReadOnly(t *testing.T) {
 	t.Parallel()
 
@@ -116,7 +117,7 @@ func TestCIWorkflowTokenIsReadOnly(t *testing.T) {
 	}
 	for id, job := range wf.Jobs {
 		if job.Permissions != nil {
-			t.Errorf("job %q sets permissions %v; no CI job writes to GitHub, so none widens the workflow's read-only token", id, job.Permissions)
+			t.Errorf("job %q sets permissions %v; no CI job writes to GitHub, so no job sets its own block beside the workflow's read-only token", id, job.Permissions)
 		}
 	}
 }
