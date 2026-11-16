@@ -329,7 +329,7 @@ When the gate cut a summary or a description, its help names [`no-mistakes axi f
 The gate help always points to `no-mistakes axi logs --step <step> --full` for the full step log.
 For an explicitly selected run both commands carry `--run <id>`.
 Relevant current-branch states also include a cached `branch_sync` object with full SHAs, the run's status, the persisted pipeline push binding, target kind and ref, relation, safety result, PR lifecycle, and a structured next action.
-Of the `ambiguous_context` states only `safety: blocked_relation_unknown` is shown, where the local head has left the submitted head and the pipeline-pushed head is not in the local object store; its next action is the live `no-mistakes sync --check`.
+Of the `ambiguous_context` states only `safety: blocked_relation_unknown` is shown, where the local head has left the submitted head and the pipeline-pushed head is not in the local object store; its next action is the live `no-mistakes axi sync --check`, while the human `no-mistakes status` names `no-mistakes sync --check`.
 Cached home and status rendering performs no network read and labels the remote observation `pipeline_push`; only explicit sync check or apply reports `live` freshness.
 
 ## no-mistakes axi sync
