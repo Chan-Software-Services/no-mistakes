@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 )
@@ -73,9 +74,7 @@ func renderLocalBranchStatus(state *branchsync.State, refreshing bool, width int
 	if width < 40 {
 		width = 80
 	}
-	// The box pads but never wraps, so the message is wrapped to its content
-	// width here, or a long one runs past the border.
-	return renderBoxWithFooter("Local branch", strings.Join(wrapText(message, width-4), "\n"), width, footer)
+	return renderBoxWithFooter("Local branch", wrapBoxContent(message, width), width, footer)
 }
 
 func trackTUISyncAttempt(mode string, state branchsync.State, result string, started time.Time) {
@@ -143,7 +142,7 @@ func renderRecoverConfirmation(state branchsync.State, width int) string {
 	} else {
 		b.WriteString("\nDirty worktrees and divergence that cannot be proven contained refuse without changes; `" + branchsync.HumanRecoverKeepLocalCommand + "` keeps the current head instead.")
 	}
-	return renderBoxWithFooter("Confirm custody recovery", b.String(), width, "u/enter recover  ·  esc cancel")
+	return renderBoxWithFooter("Confirm custody recovery", wrapBoxContent(b.String(), width), width, "u/enter recover  ·  esc cancel")
 }
 
 func renderSyncConfirmation(state branchsync.State, width int) string {
@@ -167,5 +166,23 @@ func renderSyncConfirmation(state branchsync.State, width int) string {
 	} else {
 		b.WriteString("No reset, stash, merge commit, rebase, force push, branch switch, or remote update can occur.")
 	}
-	return renderBoxWithFooter("Confirm local branch sync", b.String(), width, "u/enter apply  ·  esc cancel")
+	return renderBoxWithFooter("Confirm local branch sync", wrapBoxContent(b.String(), width), width, "u/enter apply  ·  esc cancel")
+}
+
+// wrapBoxContent word-wraps each line of content that is wider than a box of
+// width can hold, since the box pads its lines but never wraps them. A line
+// that fits is kept as written, so the aligned columns of a confirmation's
+// heads and refs keep their spacing.
+func wrapBoxContent(content string, width int) string {
+	contentWidth := width - 4
+	lines := strings.Split(content, "\n")
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if lipgloss.Width(line) <= contentWidth {
+			wrapped = append(wrapped, line)
+			continue
+		}
+		wrapped = append(wrapped, wrapText(line, contentWidth)...)
+	}
+	return strings.Join(wrapped, "\n")
 }

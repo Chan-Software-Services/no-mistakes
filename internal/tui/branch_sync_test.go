@@ -59,6 +59,15 @@ func TestBranchSyncActionRefreshesBeforeConfirmationAndAppliesThroughSharedPath(
 			t.Errorf("confirmation missing %q:\n%s", want, plain)
 		}
 	}
+	confirmation := boxView(t, renderSyncConfirmation(*m.branchSync, 80))
+	for _, want := range []string{
+		"Local HEAD:   " + strings.Repeat("a", 40),
+		"No reset, stash, merge commit, rebase, force push, branch switch, or remote update can occur.",
+	} {
+		if !strings.Contains(confirmation, want) {
+			t.Errorf("80-column confirmation missing %q:\n%s", want, confirmation)
+		}
+	}
 
 	nextModel, cmd = m.handleKey(keyMsg("enter"))
 	m = nextModel.(Model)
@@ -124,10 +133,18 @@ func TestBranchSyncActionRefreshesEquivalentDivergedBeforeConfirmation(t *testin
 	if refreshCalls != 1 || !m.syncConfirm || m.branchSync.Safety != branchsync.SafetySafeEquivalentAdvance {
 		t.Fatalf("fresh equivalent confirmation state = %#v, refresh=%d", m.branchSync, refreshCalls)
 	}
-	plain := stripANSI(m.View())
-	for _, want := range []string{"equivalent live pipeline head", "anchored before the branch moves", "u/enter apply"} {
-		if !strings.Contains(plain, want) {
-			t.Errorf("confirmation missing %q:\n%s", want, plain)
+	if plain := stripANSI(m.View()); !strings.Contains(plain, "Confirm local branch sync") {
+		t.Fatalf("view does not show the confirmation:\n%s", plain)
+	}
+	confirmation := boxView(t, renderSyncConfirmation(*m.branchSync, 80))
+	for _, want := range []string{
+		"equivalent live pipeline head",
+		"anchored before the branch moves",
+		"No stash, merge commit, rebase, force push, branch switch, or remote update can occur.",
+		"u/enter apply",
+	} {
+		if !strings.Contains(confirmation, want) {
+			t.Errorf("confirmation missing %q:\n%s", want, confirmation)
 		}
 	}
 }
@@ -232,6 +249,15 @@ func TestRecoverableCustodyActionFlowsThroughConfirmationAndRecoverService(t *te
 			t.Errorf("recover confirmation missing %q:\n%s", want, plain)
 		}
 	}
+	confirmation := boxView(t, renderRecoverConfirmation(stranded, 80))
+	for _, want := range []string{
+		"Preserved HEAD: " + strings.Repeat("c", 40),
+		"Dirty worktrees and divergence that cannot be proven contained refuse without changes; `no-mistakes sync --recover --keep-local` keeps the current head instead.",
+	} {
+		if !strings.Contains(confirmation, want) {
+			t.Errorf("80-column recover confirmation missing %q:\n%s", want, confirmation)
+		}
+	}
 
 	nextModel, cmd = m.handleKey(keyMsg("enter"))
 	m = nextModel.(Model)
@@ -299,6 +325,15 @@ func TestArchiveRecoveryConfirmationUsesOnlyGuardedKeepLocalAction(t *testing.T)
 			t.Errorf("archive confirmation missing %q:\n%s", want, confirmation)
 		}
 	}
+	confirmation = boxView(t, renderRecoverConfirmation(stranded, 80))
+	for _, want := range []string{
+		"Archive ref:    " + stranded.Recovery.ArchiveRef,
+		"Any changed archive, head, branch, run, repository, or gate evidence makes recovery refuse without selecting the divergent head.",
+	} {
+		if !strings.Contains(confirmation, want) {
+			t.Errorf("80-column archive confirmation missing %q:\n%s", want, confirmation)
+		}
+	}
 	next, cmd = m.handleKey(keyMsg("enter"))
 	m = next.(Model)
 	if cmd == nil || called {
@@ -336,26 +371,35 @@ func TestActivePipelineOwnedStateOffersNoRecoveryAction(t *testing.T) {
 	}
 }
 
-// localBranchView renders the Local branch box at 80 columns, fails the test
-// when any line does not fit the box exactly, and returns the box with its
-// wrapped message joined back onto one line, between the top and bottom
-// borders, so a test can match a phrase wherever the wrap fell.
+// localBranchView renders the Local branch box at 80 columns through
+// boxView.
 func localBranchView(t *testing.T, state *branchsync.State) string {
 	t.Helper()
+	return boxView(t, renderLocalBranchStatus(state, false, 80))
+}
+
+// boxView takes a box rendered at 80 columns, fails the test when any line
+// does not fit the box exactly, and returns the box with its content lines
+// trimmed and joined onto one line, between the top and bottom borders, so a
+// test can match a phrase wherever the wrap fell.
+func boxView(t *testing.T, rendered string) string {
+	t.Helper()
 	const width = 80
-	view := stripANSI(renderLocalBranchStatus(state, false, width))
+	view := stripANSI(rendered)
 	lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
 	for _, line := range lines {
 		if got := lipgloss.Width(line); got != width {
-			t.Errorf("Local branch line is %d columns wide, want %d:\n%s", got, width, view)
+			t.Errorf("box line is %d columns wide, want %d:\n%s", got, width, view)
 		}
 	}
 	if len(lines) < 3 {
-		t.Fatalf("Local branch box has no message line:\n%s", view)
+		t.Fatalf("box has no content line:\n%s", view)
 	}
-	message := make([]string, 0, len(lines)-2)
+	content := make([]string, 0, len(lines)-2)
 	for _, line := range lines[1 : len(lines)-1] {
-		message = append(message, strings.TrimSpace(strings.Trim(line, "│")))
+		if text := strings.TrimSpace(strings.Trim(line, "│")); text != "" {
+			content = append(content, text)
+		}
 	}
-	return lines[0] + "\n" + strings.Join(message, " ") + "\n" + lines[len(lines)-1]
+	return lines[0] + "\n" + strings.Join(content, " ") + "\n" + lines[len(lines)-1]
 }
