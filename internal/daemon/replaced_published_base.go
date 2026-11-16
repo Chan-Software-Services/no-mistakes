@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 
 	"github.com/kunchenguid/no-mistakes/internal/custody"
@@ -26,29 +27,37 @@ import (
 // published head at the run's recovery ref. A head that already contains the
 // published head keeps its base. The push step's force-push decision is
 // unchanged and still refuses a remote that moved after the published head.
-func (m *RunManager) replacedPublishedBase(ctx context.Context, repoID, branch, headSHA, baseSHA string) string {
+//
+// It fails closed, as every custody decision does: when the runs cannot be
+// read, or the replacement's evidence is present and the ancestry check cannot
+// answer, it returns an error and the run does not start, because the natural
+// base would have the Rebase step merge the replaced published head back in.
+func (m *RunManager) replacedPublishedBase(ctx context.Context, repoID, branch, headSHA, baseSHA string) (string, error) {
 	runs, err := m.db.GetRunsByRepo(repoID)
 	if err != nil {
-		return baseSHA
+		return "", fmt.Errorf("read runs to check for a replaced published head: %w", err)
 	}
 	for _, run := range runs {
 		if run.Branch != branch {
 			continue
 		}
 		if run.CustodyReturnedAt == nil || run.LastPushedSHA == nil || run.HeadSHA != *run.LastPushedSHA {
-			return baseSHA
+			return baseSHA, nil
 		}
 		published := *run.LastPushedSHA
 		gateDir := m.paths.RepoDir(repoID)
 		if !custody.PublishedHeadPinned(ctx, gateDir, run.ID, published) {
-			return baseSHA
+			return baseSHA, nil
 		}
 		_, err := git.Run(ctx, gateDir, "merge-base", "--is-ancestor", published, headSHA)
+		if err == nil {
+			return baseSHA, nil
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return published
+			return published, nil
 		}
-		return baseSHA
+		return "", fmt.Errorf("check whether head %s contains the replaced published head %s: %w", headSHA, published, err)
 	}
-	return baseSHA
+	return baseSHA, nil
 }

@@ -68,8 +68,8 @@ func replacePublishedScenario(t *testing.T) string {
 	return path
 }
 
-// TestOperatorReplacesAPublishedHeadJourney is T200's PR 273 (2026-11-04) and
-// T117's rewritten branch: a run publishes a head carrying a gate commit (a
+// TestOperatorReplacesAPublishedHeadJourney models a branch whose gate commit
+// the operator replaced: a run publishes a head carrying a gate commit (a
 // review fix), and the operator then rewrites the branch so it lacks that
 // commit. Before `sync --replace-published` existed this was a dead end:
 // status said blocked_diverged and offered only `git log`, `axi run` was

@@ -226,10 +226,7 @@ func (s *Service) replacePublishedLocalProofs(ctx context.Context, state State, 
 // advances (equivalent content) and a local head behind the published head are
 // not this case.
 func (s *Service) replacePublishedApplies(ctx context.Context, state State, run *db.Run) bool {
-	if run == nil || !terminalRunStatus(run.Status) || run.CustodyReturnedAt != nil || !exactPushedBinding(s.Repo, run, state.Local.Branch) {
-		return false
-	}
-	if state.PRState == "merged" || state.PRState == "closed" {
+	if !s.replacePublishedRunQualifies(state, run) {
 		return false
 	}
 	switch state.State {
@@ -248,6 +245,19 @@ func (s *Service) replacePublishedApplies(ctx context.Context, state State, run 
 	return probe.Safety == "blocked_diverged" || probe.Safety == "blocked_relation_unknown"
 }
 
+// replacePublishedRunQualifies is the run and pull request half of the
+// replacement's case, shared by replacePublishedApplies and
+// noteReplacePublished so the operator's sentence never names a replacement
+// that would answer not applicable: a finished run, custody not yet returned,
+// an exact push binding for the checked-out branch, and a pull request that is
+// not merged or closed.
+func (s *Service) replacePublishedRunQualifies(state State, run *db.Run) bool {
+	if run == nil || !terminalRunStatus(run.Status) || run.CustodyReturnedAt != nil || !exactPushedBinding(s.Repo, run, state.Local.Branch) {
+		return false
+	}
+	return state.PRState != "merged" && state.PRState != "closed"
+}
+
 // noteReplacePublished adds the operator's sentence to a dead-end state whose
 // locally checkable conditions for the replacement hold. It changes neither
 // the safety code nor the next action.
@@ -255,7 +265,7 @@ func (s *Service) noteReplacePublished(ctx context.Context, state *State, run *d
 	if state.Safety != "blocked_diverged" && state.Safety != "blocked_relation_unknown" {
 		return
 	}
-	if run == nil || !terminalRunStatus(run.Status) || run.CustodyReturnedAt != nil || !state.Local.Clean || !exactPushedBinding(s.Repo, run, state.Local.Branch) {
+	if !state.Local.Clean || !s.replacePublishedRunQualifies(*state, run) {
 		return
 	}
 	if strings.TrimSpace(s.GateDir) == "" {

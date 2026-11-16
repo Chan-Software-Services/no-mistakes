@@ -16,8 +16,8 @@ import (
 
 const replaceBranch = "feature/replace"
 
-// replaceFixture is T200's PR 273 shape: a completed run published a head
-// carrying a gate fix commit to the configured target, the gate branch still
+// replaceFixture is the shape of a gate commit replaced on the branch: a
+// completed run published a head carrying a gate fix commit to the configured target, the gate branch still
 // names that published head, and the operator's local branch has been
 // rewritten so it lacks the fix commit.
 type replaceFixture struct {
@@ -270,8 +270,8 @@ func TestReplacePublishedWithThePublishedHeadAbsentLocally(t *testing.T) {
 	}
 }
 
-// TestReplacePublishedLegacyRebaseThenHandMerge is T117's shape: an old
-// binary's Rebase step rebased the branch onto a newer main and published that
+// TestReplacePublishedLegacyRebaseThenHandMerge is the legacy rebase shape: an
+// old binary's Rebase step rebased the branch onto a newer main and published that
 // rebase with a fix commit on top, and the operator then merged the same main
 // into their own branch by hand and went on working. The local history lacks
 // the published commits and holds work the published head lacks, so it is not
@@ -642,4 +642,32 @@ func cloneRemoteBranchNamed(t *testing.T, remote, branch string) string {
 	configureIdentity(t, dir)
 	mustRun(t, dir, "checkout", branch)
 	return dir
+}
+
+// The operator's sentence and the replacement read one predicate for the run
+// and its pull request, so a dead end the replacement would refuse as not
+// applicable never tells the reader a person runs it.
+func TestReplacePublishedNoteSkipsAMergedOrClosedPullRequest(t *testing.T) {
+	t.Parallel()
+	for _, prState := range []string{"merged", "closed"} {
+		t.Run(prState, func(t *testing.T) {
+			t.Parallel()
+			f := newReplaceFixture(t, true)
+			cached := f.service.InspectCached(f.ctx)
+			if cached.Safety != "blocked_diverged" || !strings.Contains(cached.Error, ReplacePublishedOperatorNote) {
+				t.Fatalf("dead end = %#v, want blocked_diverged with the operator's sentence", cached)
+			}
+			run, err := f.db.GetRun(f.run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := cached
+			state.Error = strings.TrimSuffix(strings.TrimSuffix(cached.Error, ReplacePublishedOperatorNote), " ")
+			state.PRState = prState
+			f.service.noteReplacePublished(f.ctx, &state, run)
+			if strings.Contains(state.Error, ReplacePublishedOperatorNote) {
+				t.Fatalf("a %s pull request's dead end names the replacement: %q", prState, state.Error)
+			}
+		})
+	}
 }
