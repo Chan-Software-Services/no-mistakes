@@ -8,9 +8,13 @@
 // read-only, and the closing os.RemoveAll failed without a word. Enough of
 // those filled /tmp's quota and failed unrelated packages with "disk quota
 // exceeded". Setup therefore pins Go's caches before HOME moves and turns Go's
-// telemetry off inside the new HOME, and Close
-// makes the trees writable before it removes them and says so when it still
-// cannot.
+// telemetry off inside the new HOME, and Close makes the trees writable before
+// it removes them and says so when it still cannot.
+//
+// Close runs only when m.Run returns, so a run that ends any other way (a test
+// panic, a -timeout, a signal) still leaves both directories behind: a
+// TestMain cannot catch those exits. With Go's caches kept out of the HOME,
+// what such a run leaves is small.
 package testhome
 
 import (
