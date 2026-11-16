@@ -7,7 +7,7 @@
 // other without bound (github.com/ironerumi/no-mistakes#5).
 //
 // It also holds the git options a test helper that builds a repository and
-// then copies or walks it runs its git calls with, so no background
+// then copies or walks it runs its committing git calls with, so no background
 // auto-maintenance can change the repository under the copy (see
 // NoAutoMaintenance).
 package testgit

@@ -10,10 +10,11 @@ import (
 
 // NoAutoMaintenance returns the git options that keep a command from
 // starting git's auto-maintenance. A test helper that builds a repository and
-// then copies or walks it runs its git calls with them: a commit, merge or
-// fetch otherwise starts a detached `git maintenance run --auto`, which can
-// take .git/objects/maintenance.lock after the command has returned, so the
-// copy lists the lock and then finds it gone. maintenance.auto=false stops
+// then copies or walks it runs the git calls that can start it with them: a
+// commit, merge or fetch otherwise starts a detached
+// `git maintenance run --auto`, which can take .git/objects/maintenance.lock
+// after the command has returned, so the copy lists the lock and then finds
+// it gone. maintenance.auto=false stops
 // the start; gc.auto=0 keeps a git too old to have it from running
 // `gc --auto` instead.
 func NoAutoMaintenance() []string {
