@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle"
 )
 
 // Config describes the repo state and dependencies the wizard needs.
@@ -120,6 +121,10 @@ type Model struct {
 	// latches so the hook only runs once even if setupActive is re-entered.
 	waiting     bool
 	waitStarted bool
+
+	// The terminal title, set with bubbletea's window-title command and
+	// never written into the frame (see package termtitle).
+	title termtitle.Title
 }
 
 // Result reports what the wizard did. Success means the wizard completed all
@@ -173,17 +178,37 @@ func NewModel(cfg Config) Model {
 	m.steps = []*step{branch, commit, push}
 	m.active = m.firstPending()
 	m = m.setupActive()
+	m.title = termtitle.New(m.terminalTitle())
 	return m
 }
 
 // Init returns the initial Cmd for the active step. State was already
 // prepared in NewModel.
 func (m Model) Init() tea.Cmd {
-	return m.afterEnterCmd()
+	return tea.Batch(m.afterEnterCmd(), m.title.Init())
 }
 
-// Update handles bubbletea events and drives the state machine.
+// Update handles msg, then sends the terminal title when it has changed.
+// Once the wizard quits it sends no more: its quit command clears the title,
+// and Run clears it again once the program has ended, after any title still
+// in flight.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	if _, ok := msg.(termtitle.SetMsg); !ok {
+		var next tea.Model
+		next, cmd = m.update(msg)
+		m = next.(Model)
+	}
+	if m.quitting {
+		return m, cmd
+	}
+	var titleCmd tea.Cmd
+	m.title, titleCmd = m.title.Update(msg, m.terminalTitle())
+	return m, tea.Batch(cmd, titleCmd)
+}
+
+// update handles bubbletea events and drives the state machine.
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

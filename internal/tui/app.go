@@ -9,6 +9,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -68,7 +69,7 @@ type Model struct {
 	height           int
 	latestVersion    string
 	err              error
-	quitting         bool
+	quitting         bool // q or ctrl+c: Update clears the title, then quits
 	done             bool // run completed or failed
 	rerunPending     bool
 	rerunRequestID   uint64
@@ -93,6 +94,10 @@ type Model struct {
 	syncConfirm    bool
 	recoverConfirm bool
 	syncRefreshing bool
+
+	// The terminal title, set with bubbletea's window-title command and
+	// never written into the frame (see package termtitle).
+	title termtitle.Title
 }
 
 // NewModel creates a TUI model for the given run.
@@ -137,6 +142,7 @@ func NewModel(socketPath string, client *ipc.Client, run *ipc.RunInfo) Model {
 			m.stepStartTimes[s.StepName] = time.Unix(*s.StartedAt, 0)
 		}
 	}
+	m.title = termtitle.New(m.terminalTitle())
 	return m
 }
 
@@ -200,10 +206,32 @@ func shouldBackfillPipelineSteps(runStatus types.RunStatus, steps []ipc.StepResu
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.subscribeCmd()
+	return tea.Batch(m.subscribeCmd(), m.title.Init())
 }
 
+// Update handles msg, then sends the terminal title when it has changed:
+// blank once the user quits, and then, once the blank title has landed, it
+// quits.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	if _, ok := msg.(termtitle.SetMsg); !ok {
+		var next tea.Model
+		next, cmd = m.update(msg)
+		m = next.(Model)
+	}
+	want := ""
+	if !m.quitting {
+		want = m.terminalTitle()
+	}
+	var titleCmd tea.Cmd
+	m.title, titleCmd = m.title.Update(msg, want)
+	if m.quitting && m.title.Settled("") {
+		titleCmd = tea.Quit
+	}
+	return m, tea.Batch(cmd, titleCmd)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -455,11 +483,6 @@ func (m Model) terminalTitle() string {
 	return "○ Pending" + suffix
 }
 
-// setTerminalTitle returns the OSC escape sequence to set the terminal title.
-func setTerminalTitle(title string) string {
-	return "\033]2;" + title + "\007"
-}
-
 func (m *Model) resetForRun(run *ipc.RunInfo) {
 	width, height := m.width, m.height
 	nextSubscriptionID := m.subscriptionID + 1
@@ -470,6 +493,7 @@ func (m *Model) resetForRun(run *ipc.RunInfo) {
 	fresh.subscriptionID = nextSubscriptionID
 	fresh.rerunRequestID = m.rerunRequestID
 	fresh.latestVersion = latestVersion
+	fresh.title = m.title
 	*m = fresh
 }
 

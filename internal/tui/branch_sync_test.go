@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -426,19 +427,18 @@ func TestLocalBranchBoxDrawsInsideTheResponsiveLeftColumn(t *testing.T) {
 		}
 		leftWidth, _ := responsiveColumnWidths(width)
 
-		// The view opens with the terminal title's OSC sequence, which
-		// takes no columns on the terminal.
+		// Measure the frame as bubbletea's renderer does, escape sequences
+		// and all: it cuts every line it measures wider than the terminal.
 		rendered := m.View()
-		if end := strings.IndexByte(rendered, '\a'); strings.HasPrefix(rendered, "\x1b]2;") && end >= 0 {
-			rendered = rendered[end+1:]
+		for i, line := range strings.Split(rendered, "\n") {
+			if got := ansi.StringWidth(line); got > width {
+				t.Errorf("width %d: view line is %d columns wide:\n%q", width, got, line)
+			} else if i == 0 && got != width {
+				t.Errorf("width %d: the view's first line is %d columns wide, not the terminal's width:\n%q", width, got, line)
+			}
 		}
 		view := stripANSI(rendered)
 		lines := strings.Split(view, "\n")
-		for _, line := range lines {
-			if got := lipgloss.Width(line); got > width {
-				t.Errorf("width %d: view line is %d columns wide:\n%s", width, got, line)
-			}
-		}
 
 		top := -1
 		for i, line := range lines {
