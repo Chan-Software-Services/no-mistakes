@@ -73,6 +73,11 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
+	// Resolve the toolchain's caches before HOME moves: see pinGoCaches.
+	if err := pinGoCaches(); err != nil {
+		fmt.Fprintf(os.Stderr, "pin Go caches: %v\n", err)
+		os.Exit(1)
+	}
 	base := os.TempDir()
 	if runtime.GOOS != "windows" {
 		base = "/tmp"
@@ -97,8 +102,46 @@ func TestMain(m *testing.M) {
 
 	_ = daemon.Stop(paths.WithRoot(root))
 	_ = os.RemoveAll(root)
-	_ = os.RemoveAll(home)
+	// A test HOME that cannot be removed stays in /tmp for good, and enough of
+	// them fill its quota and fail every other package, so a leak fails this
+	// one by name instead.
+	if err := os.RemoveAll(home); err != nil {
+		fmt.Fprintf(os.Stderr, "remove test HOME %s: %v\n", home, err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	if builtBin != "" {
+		_ = os.RemoveAll(filepath.Dir(builtBin))
+	}
 	os.Exit(code)
+}
+
+// pinGoCaches fixes GOMODCACHE and GOCACHE at the values the toolchain
+// resolves before TestMain replaces HOME. Both default to paths under HOME, so
+// without the pin every `go build` a test runs would fill the throwaway HOME
+// with a fresh module cache and build cache: a re-download of every module and
+// a rebuild of the standard library per run, and a module cache whose
+// read-only directories os.RemoveAll cannot delete.
+func pinGoCaches() error {
+	out, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
+	if err != nil {
+		return fmt.Errorf("go env GOMODCACHE GOCACHE: %w", err)
+	}
+	values := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
+	if len(values) != 2 {
+		return fmt.Errorf("go env GOMODCACHE GOCACHE printed %d lines, want 2: %q", len(values), out)
+	}
+	for i, name := range []string{"GOMODCACHE", "GOCACHE"} {
+		value := strings.TrimSpace(values[i])
+		if value == "" {
+			return fmt.Errorf("go env %s is empty", name)
+		}
+		if err := os.Setenv(name, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func explicitDaemonRunRootFromArgs(args []string) (string, bool) {

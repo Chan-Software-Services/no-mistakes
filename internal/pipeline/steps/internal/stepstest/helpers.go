@@ -2,6 +2,7 @@ package stepstest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -145,72 +146,122 @@ func LastCommitMessage(t *testing.T, dir string) string {
 	return GitCmd(t, dir, "log", "-1", "--pretty=%s")
 }
 
-// gitRepoTemplate holds a cached template repo that setupGitRepo copies from
-// instead of running git init + config + commits each time.
+// gitRepoTemplate holds a cached template repo that SetupGitRepo copies from
+// instead of running git init + config + commits each time. It lives in the
+// temp dir until removeGitRepoTemplate, which the cleanup Init returns runs.
 var gitRepoTemplate struct {
-	once    sync.Once
+	mu      sync.Mutex
 	dir     string
 	baseSHA string
 	headSHA string
 }
 
-func EnsureGitRepoTemplate(t *testing.T) {
+// GitRepoTemplate returns the template repo's directory, its base commit on
+// main and its head commit on feature, making the template on first use.
+func GitRepoTemplate(t *testing.T) (dir, baseSHA, headSHA string) {
 	t.Helper()
-	gitRepoTemplate.once.Do(func() {
-		dir, err := os.MkdirTemp("", "git-template-*")
+	gitRepoTemplate.mu.Lock()
+	defer gitRepoTemplate.mu.Unlock()
+	if gitRepoTemplate.dir == "" {
+		dir, baseSHA, headSHA, err := makeGitRepoTemplate()
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		run := func(args ...string) string {
-			cmd := exec.Command("git", args...)
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(),
-				"GIT_AUTHOR_NAME=test",
-				"GIT_AUTHOR_EMAIL=test@test.com",
-				"GIT_COMMITTER_NAME=test",
-				"GIT_COMMITTER_EMAIL=test@test.com",
-			)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				panic(fmt.Sprintf("git %v: %v: %s", args, err, out))
-			}
-			return strings.TrimSpace(string(out))
-		}
-
-		run("init")
-		run("config", "user.name", "test")
-		run("config", "user.email", "test@test.com")
-		run("checkout", "-b", "main")
-
-		os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base content"), 0o644)
-		run("add", "-A")
-		run("commit", "-m", "base commit")
-		gitRepoTemplate.baseSHA = run("rev-parse", "HEAD")
-
-		run("checkout", "-b", "feature")
-		os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature code\n"), 0o644)
-		run("add", "-A")
-		run("commit", "-m", "add feature")
-		gitRepoTemplate.headSHA = run("rev-parse", "HEAD")
-
-		gitRepoTemplate.dir = dir
-	})
+		gitRepoTemplate.dir, gitRepoTemplate.baseSHA, gitRepoTemplate.headSHA = dir, baseSHA, headSHA
+	}
+	return gitRepoTemplate.dir, gitRepoTemplate.baseSHA, gitRepoTemplate.headSHA
 }
 
-// setupGitRepo creates a git repo with a base commit on main and a head commit on feature.
+func makeGitRepoTemplate() (dir, baseSHA, headSHA string, err error) {
+	dir, err = os.MkdirTemp("", "git-template-*")
+	if err != nil {
+		return "", "", "", err
+	}
+	defer func() {
+		if err != nil {
+			if removeErr := os.RemoveAll(dir); removeErr != nil {
+				err = fmt.Errorf("%w; remove template repo: %v", err, removeErr)
+			}
+		}
+	}()
+
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test",
+			"GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=test",
+			"GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	commit := func(file, content, message string) (string, error) {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+			return "", err
+		}
+		for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", message}} {
+			if _, err := run(args...); err != nil {
+				return "", err
+			}
+		}
+		return run("rev-parse", "HEAD")
+	}
+
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.name", "test"},
+		{"config", "user.email", "test@test.com"},
+		{"checkout", "-b", "main"},
+	} {
+		if _, err = run(args...); err != nil {
+			return "", "", "", err
+		}
+	}
+	if baseSHA, err = commit("base.txt", "base content", "base commit"); err != nil {
+		return "", "", "", err
+	}
+	if _, err = run("checkout", "-b", "feature"); err != nil {
+		return "", "", "", err
+	}
+	if headSHA, err = commit("feature.txt", "feature code\n", "add feature"); err != nil {
+		return "", "", "", err
+	}
+	return dir, baseSHA, headSHA, nil
+}
+
+// removeGitRepoTemplate removes the template repo, read-only git objects
+// included, so a later GitRepoTemplate makes it again.
+func removeGitRepoTemplate() error {
+	gitRepoTemplate.mu.Lock()
+	defer gitRepoTemplate.mu.Unlock()
+	if gitRepoTemplate.dir == "" {
+		return nil
+	}
+	if err := os.RemoveAll(gitRepoTemplate.dir); err != nil {
+		return fmt.Errorf("remove template repo: %w", err)
+	}
+	gitRepoTemplate.dir, gitRepoTemplate.baseSHA, gitRepoTemplate.headSHA = "", "", ""
+	return nil
+}
+
+// SetupGitRepo creates a git repo with a base commit on main and a head commit on feature.
 // Returns (repoDir, baseSHA, headSHA).
-// Uses a cached template repo and copies it via cp -a for speed.
+// Copies the cached template repo for speed.
 func SetupGitRepo(t *testing.T) (string, string, string) {
 	t.Helper()
-	EnsureGitRepoTemplate(t)
+	template, baseSHA, headSHA := GitRepoTemplate(t)
 
 	dir := t.TempDir()
-	if err := copyDirContents(gitRepoTemplate.dir, dir); err != nil {
+	if err := copyDirContents(template, dir); err != nil {
 		t.Fatalf("copy template repo: %v", err)
 	}
 
-	return dir, gitRepoTemplate.baseSHA, gitRepoTemplate.headSHA
+	return dir, baseSHA, headSHA
 }
 
 // newTestContext creates a StepContext for testing with optional config overrides.
@@ -302,6 +353,9 @@ func FakeCLIBinDir(t *testing.T) string {
 // test binary as those names was ~0.8s per spawn and dominated CI-monitor tests.
 var fakeCLIHelperPath string
 
+// Init builds the fake CLI helper for a package's TestMain. The cleanup it
+// returns, which TestMain runs after m.Run, removes the helper and the git
+// template repo SetupGitRepo made.
 func Init() (func() error, error) {
 	root, err := findModuleRoot()
 	if err != nil {
@@ -329,7 +383,7 @@ func Init() (func() error, error) {
 	fakeCLIHelperPath = path
 	return func() error {
 		fakeCLIHelperPath = ""
-		return os.RemoveAll(dir)
+		return errors.Join(os.RemoveAll(dir), removeGitRepoTemplate())
 	}, nil
 }
 

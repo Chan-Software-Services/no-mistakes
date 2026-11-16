@@ -507,17 +507,27 @@ func (h *Harness) WaitForRunRunning(branch string, timeout time.Duration) *ipc.R
 
 func (h *Harness) Runs() []ipc.RunInfo {
 	h.t.Helper()
+	runs, err := h.runs()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return runs
+}
+
+// runs is Runs for a wait that polls: it returns a failed call's error rather
+// than failing the test, which would replace the wait's own message.
+func (h *Harness) runs() ([]ipc.RunInfo, error) {
 	p := paths.WithRoot(h.NMHome)
 	client, err := ipc.Dial(p.Socket())
 	if err != nil {
-		h.t.Fatalf("dial daemon: %v", err)
+		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
 	defer client.Close()
 	var result ipc.GetRunsResult
 	if err := client.Call(ipc.MethodGetRuns, &ipc.GetRunsParams{RepoID: h.repoID()}, &result); err != nil {
-		h.t.Fatalf("get runs: %v", err)
+		return nil, fmt.Errorf("get runs: %w", err)
 	}
-	return result.Runs
+	return result.Runs, nil
 }
 
 func (h *Harness) RunInfo(runID string) *ipc.RunInfo {
@@ -617,48 +627,44 @@ func (h *Harness) CancelRun(runID string) {
 
 func (h *Harness) waitForRunStatus(branch string, timeout time.Duration, match func(types.RunStatus) bool, action string) *ipc.RunInfo {
 	h.t.Helper()
-	deadline := time.Now().Add(timeout)
+	run, err := h.pollRunStatus(branch, timeout, match, action)
+	if err != nil {
+		h.dumpDebugState()
+		h.t.Fatal(err)
+	}
+	return run
+}
 
+// pollRunStatus polls until the newest run on branch has a status match
+// accepts, and returns that run. A failed poll is polled again until the
+// timeout, so a daemon that is not reachable yet is waited for, and one that
+// never answers ends the wait with an error that carries the last poll's
+// error beside the newest run an earlier poll saw.
+func (h *Harness) pollRunStatus(branch string, timeout time.Duration, match func(types.RunStatus) bool, action string) (*ipc.RunInfo, error) {
+	deadline := time.Now().Add(timeout)
 	var lastRun *ipc.RunInfo
+	var pollErr error
 	for time.Now().Before(deadline) {
-		var result ipc.GetRunsResult
-		var ok bool
-		func() {
-			p := paths.WithRoot(h.NMHome)
-			client, err := ipc.Dial(p.Socket())
-			if err != nil {
-				return
-			}
-			defer client.Close()
-			if err := client.Call(ipc.MethodGetRuns, &ipc.GetRunsParams{RepoID: h.repoID()}, &result); err != nil {
-				return
-			}
-			ok = true
-		}()
-		if !ok {
-			// Daemon not yet reachable or RPC failed; back off and retry.
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-		for i := range result.Runs {
-			r := &result.Runs[i]
+		var runs []ipc.RunInfo
+		runs, pollErr = h.runs()
+		for i := range runs {
+			r := &runs[i]
 			if r.Branch != branch {
 				continue
 			}
 			lastRun = r
 			if match(r.Status) {
-				return r
+				return r, nil
 			}
 			break
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	h.dumpDebugState()
+	progress := polledRunProgress(lastRun, pollErr)
 	if lastRun != nil {
-		h.t.Fatalf("run for branch %s did not %s in %v (%s)", branch, action, timeout, runProgress(lastRun))
+		return nil, fmt.Errorf("run for branch %s did not %s in %v (%s)", branch, action, timeout, progress)
 	}
-	h.t.Fatalf("no run found for branch %s within %v", branch, timeout)
-	return nil
+	return nil, fmt.Errorf("no run found for branch %s within %v (%s)", branch, timeout, progress)
 }
 
 // runProgress says where a run stopped, for a wait that timed out: the run's
@@ -699,6 +705,17 @@ func (h *Harness) runProgressByID(runID string) string {
 		return fmt.Sprintf("run not readable: %v", err)
 	}
 	return runProgress(run)
+}
+
+// polledRunProgress is runProgress for a wait that reads the runs with h.runs,
+// whether it polls them or looks them up once at its timeout: lastRun is the
+// newest run a lookup saw, and a non-nil lookupErr, the error of the last
+// lookup, is reported beside it, since the run may have moved on unseen.
+func polledRunProgress(lastRun *ipc.RunInfo, lookupErr error) string {
+	if lookupErr == nil {
+		return runProgress(lastRun)
+	}
+	return fmt.Sprintf("%s; runs lookup failed: %v", runProgress(lastRun), lookupErr)
 }
 
 // dumpDebugState writes the daemon log, agent log, and per-step run

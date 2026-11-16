@@ -16,7 +16,7 @@ func runClaude(args []string, promptReader io.Reader, scenario *Scenario) int {
 	}
 	logInvocation("claude", prompt, args)
 
-	action := scenario.Match(prompt)
+	action := scenario.Match(prompt).withEvidenceDir(prompt)
 	if err := applyAction(action); err != nil {
 		return 1
 	}
