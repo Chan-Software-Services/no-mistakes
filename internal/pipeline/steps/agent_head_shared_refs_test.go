@@ -71,7 +71,7 @@ func TestAgentHeadRecordingPreservesSharedGateRefs(t *testing.T) {
 						t.Fatalf("agent head not recorded: memory=%s persisted=%+v err=%v", sctx.Run.HeadSHA, persisted, err)
 					}
 					if sctx.Run.SubmittedHeadSHA == nil || *sctx.Run.SubmittedHeadSHA != submittedHead || persisted.SubmittedHeadSHA == nil || *persisted.SubmittedHeadSHA != submittedHead {
-						t.Fatalf("recording changed Decision 41-A's exact submission boundary: %+v", persisted)
+						t.Fatalf("recording changed the submission boundary the publication backstop reads: %+v", persisted)
 					}
 					rng, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
 					if err != nil || rng == nil || rng.FromSHA != submittedHead || rng.ToSHA != agentHead || rng.SourceRunID != sctx.Run.ID {

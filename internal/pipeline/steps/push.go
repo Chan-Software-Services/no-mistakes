@@ -140,9 +140,9 @@ func publishRunHead(sctx *pipeline.StepContext, headBeingPushed, localRefUpdate 
 		return err
 	}
 	// Prove the private mirror is safe to reconcile BEFORE anything is
-	// published: outside the exact run-owned-head exception, unproven private
-	// content must refuse while the branch is intact. Applying the plan is deferred
-	// until the upstream push is verified, because a refused or failed push is
+	// published: unproven private content must refuse while the branch is
+	// intact. Applying the plan is deferred until the upstream push is
+	// verified, because a refused or failed push is
 	// a designed outcome and a gate left with no branch ref would strand
 	// `rerun` and branch-sync recovery on a branch that never published.
 	mirrorPlan, err := planGateMirrorReconciliation(ctx, sctx, ref, branch, headBeingPushed)
@@ -236,14 +236,12 @@ func publishRunHead(sctx *pipeline.StepContext, headBeingPushed, localRefUpdate 
 }
 
 // planGateMirrorReconciliation inspects the gate mirror without mutating it.
-// Only the heads this run itself placed on the mirror - its exact submitted
-// head and its exact durable last-published head - are eligible for the policy
-// exception owned by docs/src/content/docs/concepts/gate-model.md. Do not
-// substitute an agent-created or other recorded head: those still require
-// preservation checks. assertPushHeadKeepsRunHistory runs first and requires
-// the published head to contain both of those heads, so a mirror at either one
-// is an ancestor that needs no reconciliation and the exception never fires
-// here; it stays as the gate's own rule rather than this caller's.
+// The mirror is reconciled only when it is an ancestor of the pushed head, a
+// newer descendant left in place, or a head the content proof shows the pushed
+// head carries (docs/src/content/docs/concepts/gate-model.md); there is no
+// exception for a head this run placed there. assertPushHeadKeepsRunHistory
+// runs first and requires the pushed head to contain the run's submitted and
+// last pushed heads, so a mirror at either one is an ancestor.
 func planGateMirrorReconciliation(ctx context.Context, sctx *pipeline.StepContext, ref, branch, headBeingPushed string) (gatepkg.StaleBranchPlan, error) {
 	var plan gatepkg.StaleBranchPlan
 	if sctx.Repo == nil || strings.TrimSpace(sctx.GateDir) == "" {
@@ -256,11 +254,7 @@ func planGateMirrorReconciliation(ctx context.Context, sctx *pipeline.StepContex
 		}
 		return plan, fmt.Errorf("update gate mirror ref %s before push: stat repository: %w", ref, err)
 	}
-	publishedHead, err := runOwnedPublishedHead(sctx)
-	if err != nil {
-		return plan, fmt.Errorf("update gate mirror ref %s before push: %w", ref, err)
-	}
-	plan, err = gatepkg.PlanMirrorPublicationReconciliation(ctx, gateDir, sctx.WorkDir, branch, headBeingPushed, runOwnedSubmittedHead(sctx), publishedHead)
+	plan, err := gatepkg.PlanMirrorPublicationReconciliation(ctx, gateDir, sctx.WorkDir, branch, headBeingPushed)
 	if err != nil {
 		return gatepkg.StaleBranchPlan{}, fmt.Errorf("update gate mirror ref %s before push: %w", ref, err)
 	}
@@ -276,8 +270,8 @@ func runOwnedSubmittedHead(sctx *pipeline.StepContext) string {
 
 // runOwnedPublishedHead returns the head this run last published, read from
 // the durable run record. Once a run has published, the mirror carries that
-// head rather than the submitted one, which is why the mirror exception and
-// the publication backstop (assertPushHeadKeepsRunHistory) both read it.
+// head rather than the submitted one, which is why the publication backstop
+// (assertPushHeadKeepsRunHistory) reads it.
 // UpdateRunPublication writes the value only
 // after a verified push and mirror settlement, so it is never an external or
 // newer head, and the upstream push is leased on the same SHA

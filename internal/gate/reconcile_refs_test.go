@@ -14,7 +14,7 @@ func TestReconciliationRejectsSymbolicRefs(t *testing.T) {
 			t.Run(phase+"/"+symbolic, func(t *testing.T) {
 				ctx := context.Background()
 				work, gateDir, privateHead, liveHead := reconciliationRefFixture(t)
-				plan, err := PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead, privateHead)
+				plan, err := PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead)
 				if err != nil || !plan.Reconcile {
 					t.Fatalf("direct-ref fixture plan = %+v, err = %v", plan, err)
 				}
@@ -32,7 +32,7 @@ func TestReconciliationRejectsSymbolicRefs(t *testing.T) {
 				reconcileGit(t, gateDir, "symbolic-ref", ref, target)
 				refsBefore := reconcileGit(t, gateDir, "for-each-ref", "--format=%(refname) %(objectname) %(symref)")
 				if phase == "plan" {
-					_, err = PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead, privateHead)
+					_, err = PlanMirrorPublicationReconciliation(ctx, gateDir, work, "feature", liveHead)
 				} else {
 					_, err = ApplyStaleBranchReconciliation(ctx, gateDir, plan)
 				}
@@ -79,9 +79,9 @@ done
 			if err := os.WriteFile(filepath.Join(gateDir, "hooks", "reference-transaction"), []byte(hook), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			result, err := ReconcileStaleBranch(ctx, gateDir, work, "feature", liveHead, privateHead)
+			result, err := ReconcileStaleBranch(ctx, gateDir, work, "feature", liveHead)
 			if err != nil || !result.Reconciled || result.PreviousHead != privateHead || result.ArchivedTag != archive {
-				t.Fatalf("direct Decision 41-A reconciliation = %+v, err = %v", result, err)
+				t.Fatalf("direct proven reconciliation = %+v, err = %v", result, err)
 			}
 			observed, err := os.ReadFile(filepath.Join(gateDir, "archive-before-delete.observed"))
 			if err != nil || string(observed) != privateHead {
@@ -112,6 +112,10 @@ done
 	}
 }
 
+// reconciliationRefFixture puts a private head on the gate's feature and other
+// branches and builds a live head that rewrites it: a reviewed commit, then the
+// private commit's own patch, so the content proof accepts the private head and
+// reconciliation reaches the ref operations these tests exercise.
 func reconciliationRefFixture(t *testing.T) (string, string, string, string) {
 	t.Helper()
 	work := initReconcileRepo(t)
@@ -124,6 +128,9 @@ func reconciliationRefFixture(t *testing.T) (string, string, string, string) {
 	writeReconcileFile(t, work, "live.txt", "reviewed rewrite\n")
 	reconcileGit(t, work, "add", "live.txt")
 	reconcileGit(t, work, "commit", "-m", "reviewed rewrite")
+	writeReconcileFile(t, work, "private.txt", "private work\n")
+	reconcileGit(t, work, "add", "private.txt")
+	reconcileGit(t, work, "commit", "-m", "rebased private work")
 	liveHead := reconcileGit(t, work, "rev-parse", "HEAD")
 	gateDir := filepath.Join(t.TempDir(), "gate.git")
 	reconcileGit(t, "", "init", "--bare", gateDir)

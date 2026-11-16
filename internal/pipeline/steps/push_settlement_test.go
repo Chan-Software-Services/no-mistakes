@@ -20,6 +20,9 @@ func TestMirrorSettlementFailureRestoresArchivedBranch(t *testing.T) {
 			gitCmd(t, gateDir, "fetch", dir, submitted+":refs/heads/feature")
 			gitCmd(t, dir, "checkout", "--detach", base)
 			gitCmd(t, dir, "commit", "--allow-empty", "-m", "reviewed rewrite")
+			// The rewrite carries the submitted commit's own patch, so the
+			// content proof accepts the mirror head and planning reconciles it.
+			gitCmd(t, dir, "cherry-pick", submitted)
 			reviewed := gitCmd(t, dir, "rev-parse", "HEAD")
 			plan, err := planGateMirrorReconciliation(sctx.Ctx, sctx, "refs/heads/feature", "feature", reviewed)
 			if err != nil || !plan.Reconcile {
