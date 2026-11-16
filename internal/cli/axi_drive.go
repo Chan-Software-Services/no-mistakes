@@ -1485,7 +1485,7 @@ func runAxiAbort(cmd *cobra.Command, runID string) error {
 		fields = append(fields, branchSyncField(state))
 	}
 	help := []string{
-		"Run `no-mistakes axi sync --check` before any local follow-up commit - a cancelled run can leave unpublished pipeline commits preserved in the local gate, and the check offers the guarded custody recovery",
+		"Run `" + branchsync.AgentCheckCommand + "` before any local follow-up commit - a cancelled run can leave unpublished pipeline commits preserved in the local gate, and the check offers the guarded custody recovery",
 	}
 	if state.Pipeline.RunID == active.Run.ID {
 		switch {

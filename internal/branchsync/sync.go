@@ -114,10 +114,21 @@ type RemoteState struct {
 	ObservedAt   int64
 }
 
+// NextAction is the one action a state offers. Command is the exact command an
+// agent runs for it: the agent surfaces print it as
+// branch_sync.next_action.command and in their help, and the human surfaces
+// never print it, so it names the axi form wherever one exists.
 type NextAction struct {
 	Code    string
 	Command string
 }
+
+// The live synchronization check as each reader runs it: the axi form, whose
+// output is TOON, for an agent surface, and the human form for a person's.
+const (
+	AgentCheckCommand = "no-mistakes axi sync --check"
+	HumanCheckCommand = "no-mistakes sync --check"
+)
 
 // RecoveryEvidence describes the exact preservation proof behind a recovery
 // action. Bound archive recovery is deliberately keep-local-only: the archive
@@ -314,7 +325,7 @@ func (s *Service) Refresh(ctx context.Context) State {
 		state.State = StateOffline
 		state.Safety = "blocked_offline"
 		state.Error = "could not refresh the configured push target; no files or refs were changed"
-		state.NextAction = &NextAction{Code: "retry", Command: "no-mistakes sync --check"}
+		state.NextAction = &NextAction{Code: "retry", Command: AgentCheckCommand}
 		return state
 	}
 	state.Remote.Freshness = "live"
@@ -1747,7 +1758,7 @@ func (s *Service) classifyRelation(ctx context.Context, state *State, pushed, ba
 		state.Relation = RelationUnknown
 		state.Safety = "blocked_relation_unknown"
 		state.Error = "the pipeline-pushed commit is not available locally; run an explicit synchronization check"
-		state.NextAction = &NextAction{Code: "check_sync", Command: "no-mistakes sync --check"}
+		state.NextAction = &NextAction{Code: "check_sync", Command: AgentCheckCommand}
 		return
 	}
 	if live {

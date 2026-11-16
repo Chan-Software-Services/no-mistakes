@@ -522,7 +522,7 @@ func humanSyncSummary(state branchsync.State) string {
 		return "diverged from the pipeline-pushed head; manual reconciliation required"
 	case branchsync.StateAmbiguousContext:
 		if state.Safety == "blocked_relation_unknown" {
-			return "the pipeline-pushed commit is not available locally; check it live with `no-mistakes sync --check`"
+			return "the pipeline-pushed commit is not available locally; check it live with `" + branchsync.HumanCheckCommand + "`"
 		}
 		return strings.ReplaceAll(state.State, "_", " ")
 	case branchsync.StateSynchronized:

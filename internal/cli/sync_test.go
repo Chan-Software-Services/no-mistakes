@@ -26,7 +26,13 @@ type cliSyncFixture struct {
 
 func newCLISyncFixture(t *testing.T) cliSyncFixture {
 	t.Helper()
-	nmHome := filepath.Join(t.TempDir(), "nm-home")
+	return newCLISyncFixtureAtHome(t, filepath.Join(t.TempDir(), "nm-home"))
+}
+
+// newCLISyncFixtureAtHome builds the sync fixture under nmHome, for a test
+// that also serves a daemon socket there and so needs a socket-safe path.
+func newCLISyncFixtureAtHome(t *testing.T, nmHome string) cliSyncFixture {
+	t.Helper()
 	t.Setenv("NM_HOME", nmHome)
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote.git")
