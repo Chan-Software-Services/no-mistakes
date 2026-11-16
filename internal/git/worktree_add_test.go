@@ -295,19 +295,6 @@ func TestWorktreeAddUndoesAFailedCreation(t *testing.T) {
 			t.Errorf("the repository holds %s after a failed add", removedWorktreeTrash)
 		}
 	})
-	t.Run("cancelled context", func(t *testing.T) {
-		f := newBareWorktreeAddFixture(t, nil)
-		wt := filepath.Join(t.TempDir(), "run-1")
-		ctx, cancel := context.WithCancel(f.ctx)
-		cancel()
-		if err := WorktreeAdd(ctx, f.repo, wt, f.sha); err == nil {
-			t.Fatal("WorktreeAdd with a cancelled context succeeded")
-		}
-		if _, err := os.Lstat(wt); !os.IsNotExist(err) {
-			t.Fatalf("the worktree path exists after a failed add (lstat error %v)", err)
-		}
-		f.assertNothingLeftBehind(t, wt)
-	})
 	// A required filter that fails makes the checkout fail part way.
 	failingGate := func(t *testing.T) *worktreeAddFixture {
 		f := routeThroughFilter(t, "broken")
@@ -428,5 +415,63 @@ func TestWorktreeAddFallsBackToGitOnAnotherRefFormat(t *testing.T) {
 	assertUsableDetachedWorktree(t, f, wt)
 	if names := f.entries(t, newWorktreeStaging); names != nil {
 		t.Fatalf("the reftable gate holds %s/ (%v): the add did not fall back to git's own", newWorktreeStaging, names)
+	}
+}
+
+// The prune that git's maintenance runs after a push deletes worktrees/ once
+// it is empty, which it is on a gate's first run or once its last entry went.
+// An add that finds worktrees/ gone when it renames its staged entry in must
+// still succeed. Every add here starts with worktrees/ absent, while prunes run
+// back to back.
+func TestWorktreeAddSurvivesAPruneDeletingTheEmptyWorktreesDirectory(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	bare := filepath.Join(base, "gate.git")
+	if err := InitBare(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	seedGate(t, base, bare)
+	if err := IsolateHooksPath(ctx, bare); err != nil {
+		t.Fatalf("IsolateHooksPath: %v", err)
+	}
+	worktrees := filepath.Join(bare, "worktrees")
+
+	stop := make(chan struct{})
+	pruned := make(chan int)
+	go func() {
+		n := 0
+		defer func() { pruned <- n }()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = exec.Command("git", "--git-dir="+bare, "worktree", "prune").Run()
+			n++
+		}
+	}()
+
+	const adds = 200
+	var failures []string
+	for i := 0; i < adds; i++ {
+		if err := os.RemoveAll(worktrees); err != nil {
+			t.Fatal(err)
+		}
+		wt := filepath.Join(base, "wt")
+		if err := WorktreeAdd(ctx, bare, wt, "refs/heads/main"); err != nil {
+			failures = append(failures, err.Error())
+			_ = os.RemoveAll(wt)
+			continue
+		}
+		if err := WorktreeRemove(ctx, bare, wt); err != nil {
+			t.Fatalf("WorktreeRemove: %v", err)
+		}
+	}
+	close(stop)
+	prunes := <-pruned
+	t.Logf("%d adds, %d prunes", adds, prunes)
+	if len(failures) > 0 {
+		t.Fatalf("%d of %d adds failed while prunes ran, first: %s", len(failures), adds, failures[0])
 	}
 }

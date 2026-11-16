@@ -28,6 +28,10 @@ const worktreeAdminGitdirPending = "gitdir.pending"
 // entry's name that is already taken.
 const maxWorktreeEntrySuffix = 999
 
+// maxWorktreesDirRecreations bounds how often WorktreeAdd makes worktrees/
+// again for one rename after a prune deleted it.
+const maxWorktreesDirRecreations = 100
+
 // WorktreeAdd creates a worktree of the repository at repoDir at wtPath, its
 // HEAD detached at the commit rev names (a SHA, a branch name or a full ref).
 //
@@ -141,10 +145,8 @@ func (c *worktreeCreation) create(ctx context.Context, rev string) error {
 	// Stage the admin entry where git does not look.
 	stagingRoot := filepath.Join(c.commonDir, newWorktreeStaging)
 	worktreesDir := filepath.Join(c.commonDir, "worktrees")
-	for _, dir := range []string{stagingRoot, worktreesDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create %s: %w", dir, err)
-		}
+	if err := os.MkdirAll(stagingRoot, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", stagingRoot, err)
 	}
 	if c.staging, err = os.MkdirTemp(stagingRoot, "wt-"); err != nil {
 		return fmt.Errorf("create staging directory: %w", err)
@@ -267,29 +269,44 @@ func (c *worktreeCreation) stageWorktreeConfig(ctx context.Context, source strin
 
 // renameIn renames the staged entry to worktrees/<id>, taking <id>1, <id>2 and
 // so on while the name is taken.
+//
+// It makes worktrees/ right before each rename, and again when the rename
+// failed because worktrees/ is gone: `git worktree prune`, which the
+// maintenance after a push runs, deletes worktrees/ whenever it is empty, as
+// it is on a gate's first run.
 func (c *worktreeCreation) renameIn(worktreesDir string) error {
 	id := worktreeEntryName(c.wtAbs)
+	recreations := 0
 	for n := 0; n <= maxWorktreeEntrySuffix; n++ {
 		name := id
 		if n > 0 {
 			name += strconv.Itoa(n)
 		}
 		target := filepath.Join(worktreesDir, name)
-		// A rename replaces an empty directory on some systems; never take the
-		// place of anything already there.
-		if _, err := os.Lstat(target); !os.IsNotExist(err) {
-			continue
+		for {
+			if err := os.MkdirAll(worktreesDir, 0o755); err != nil {
+				return fmt.Errorf("create %s: %w", worktreesDir, err)
+			}
+			// A rename replaces an empty directory on some systems; never take
+			// the place of anything already there.
+			if _, err := os.Lstat(target); !os.IsNotExist(err) {
+				break
+			}
+			err := os.Rename(c.staging, target)
+			if err == nil {
+				c.staging = ""
+				c.adminDir = target
+				return nil
+			}
+			if _, statErr := os.Lstat(target); statErr == nil {
+				break
+			}
+			if _, statErr := os.Lstat(worktreesDir); os.IsNotExist(statErr) && recreations < maxWorktreesDirRecreations {
+				recreations++
+				continue
+			}
+			return fmt.Errorf("move admin entry into %s: %w", worktreesDir, err)
 		}
-		err := os.Rename(c.staging, target)
-		if err == nil {
-			c.staging = ""
-			c.adminDir = target
-			return nil
-		}
-		if _, statErr := os.Lstat(target); statErr == nil {
-			continue
-		}
-		return fmt.Errorf("move admin entry into %s: %w", worktreesDir, err)
 	}
 	return fmt.Errorf("move admin entry into %s: every name from %s to %s%d is taken", worktreesDir, id, id, maxWorktreeEntrySuffix)
 }
