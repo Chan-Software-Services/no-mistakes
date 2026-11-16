@@ -82,7 +82,7 @@ As an independent safety layer, the daemon also refuses to bind the Unix socket 
 
 When a push arrives via the post-receive hook:
 
-1. Creates a detached worktree at `~/.no-mistakes/worktrees/<repoID>/<runID>/`, or at `<root>/<runID>` when [`worktree_roots`](/no-mistakes/reference/global-config/#worktree_roots) names a directory for that repository. The placement is resolved once, at run creation, and recorded on the run, so editing the setting never retargets a run that already exists
+1. Creates a detached worktree at `~/.no-mistakes/worktrees/<repoID>/<runID>/`, or at `<root>/<runID>` when [`worktree_roots`](/no-mistakes/reference/global-config/#worktree_roots) names a directory for that repository. The placement is resolved once, at run creation, and recorded on the run, so editing the setting never retargets a run that already exists. The worktree is registered with the gate repository only once it is fully created (on a gate whose refs are in the `files` format, git's long-standing default), so a push that arrives while a run is starting is not disturbed by it
 2. Starts the pipeline executor in that worktree
 3. Streams events to any connected TUI clients and serves request/response state to AXI clients
 4. Cleans up the worktree when the run finishes (success or failure), subject to the retention rules below. The cleanup first unregisters the worktree from the gate repository and only then deletes it, so a push that arrives while a finished run is being cleaned up is not disturbed by it. A removed worktree leaves a two-file entry (`commondir` and `locked`) under the gate repository's `worktrees/` directory, which a later cleanup in the same repository deletes once it is over a minute old

@@ -410,3 +410,199 @@ func TestWorktreeRemoveRemovesAWorktreeLinkedWithRelativePaths(t *testing.T) {
 		t.Fatalf("removed worktree's admin directory holds %v, want only commondir and locked", names)
 	}
 }
+
+// killCreation turns the finished worktree whose admin entry is admin back into
+// what WorktreeAdd leaves when it dies after renaming the entry in and before
+// listing it: no gitdir file, the creation lock, and gitdir.pending holding
+// what gitdir held.
+func killCreation(t *testing.T, admin string) {
+	t.Helper()
+	if err := os.Rename(filepath.Join(admin, worktreeAdminGitdir), filepath.Join(admin, worktreeAdminGitdirPending)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(admin, worktreeAdminLocked), []byte(creatingWorktreeLockReason), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A creation the daemon did not live to finish leaves an unlisted entry under
+// the creation lock, its future gitdir file in gitdir.pending. The run's end
+// removes its working directory as usual, and that removal takes the entry
+// too - but only when gitdir.pending names that working directory, since the
+// entry is found through the working directory's own .git file.
+func TestWorktreeRemoveRemovesAWorktreeWhoseCreationDied(t *testing.T) {
+	t.Run("gitdir.pending names the working directory", func(t *testing.T) {
+		f := newWorktreeRemoveFixture(t)
+		killCreation(t, f.admin)
+		if f.listsWorktree(t) {
+			t.Fatal("fixture: git lists a worktree whose creation died")
+		}
+
+		if err := WorktreeRemove(f.ctx, f.bare, f.wt); err != nil {
+			t.Fatalf("WorktreeRemove: %v", err)
+		}
+
+		if _, err := os.Lstat(f.wt); !os.IsNotExist(err) {
+			t.Fatalf("working directory still exists (lstat error %v)", err)
+		}
+		if names := adminEntryNames(t, f.admin); !slices.Equal(names, []string{"commondir", "locked"}) {
+			t.Fatalf("admin directory holds %v, want only commondir and locked", names)
+		}
+		if reason, err := os.ReadFile(filepath.Join(f.admin, worktreeAdminLocked)); err != nil || string(reason) != removedWorktreeLockReason {
+			t.Fatalf("lock file = %q, %v; want the removal's lock", reason, err)
+		}
+		if f.listsWorktree(t) {
+			t.Fatal("git lists the removed worktree")
+		}
+	})
+
+	refused := func(t *testing.T, f *worktreeRemoveFixture) {
+		t.Helper()
+		before := adminEntryNames(t, f.admin)
+		if err := WorktreeRemove(f.ctx, f.bare, f.wt); !errors.Is(err, ErrNotLinkedWorktree) {
+			t.Fatalf("WorktreeRemove = %v, want ErrNotLinkedWorktree", err)
+		}
+		if after := adminEntryNames(t, f.admin); !slices.Equal(after, before) {
+			t.Fatalf("the refused entry changed from %v to %v", before, after)
+		}
+		if reason, err := os.ReadFile(filepath.Join(f.admin, worktreeAdminLocked)); err != nil || string(reason) != creatingWorktreeLockReason {
+			t.Fatalf("the refused entry's lock = %q, %v; want the creation's lock", reason, err)
+		}
+		if entries, err := os.ReadDir(f.wt); err != nil || len(entries) < 2 {
+			t.Fatalf("the refused working directory was emptied: %d entries, %v", len(entries), err)
+		}
+	}
+
+	t.Run("gitdir.pending names another path", func(t *testing.T) {
+		f := newWorktreeRemoveFixture(t)
+		killCreation(t, f.admin)
+		elsewhere := filepath.Join(t.TempDir(), "elsewhere")
+		if err := os.MkdirAll(elsewhere, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.admin, worktreeAdminGitdirPending), []byte(filepath.ToSlash(filepath.Join(elsewhere, ".git"))+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, f)
+	})
+
+	t.Run("gitdir.pending is missing", func(t *testing.T) {
+		f := newWorktreeRemoveFixture(t)
+		killCreation(t, f.admin)
+		if err := os.Remove(filepath.Join(f.admin, worktreeAdminGitdirPending)); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, f)
+	})
+}
+
+// A dead creation whose working directory nobody removes is left to the sweep,
+// and so is a staging directory a creation died in before renaming it in. A
+// creation in flight must never be swept, so the grace is far beyond any
+// checkout, and far beyond the grace of a removal's leftover.
+func TestWorktreeRemoveSweepsADeadCreationOnlyAfterItsGracePeriod(t *testing.T) {
+	f := newWorktreeRemoveFixture(t)
+	setAge := func(path string, age time.Duration) {
+		t.Helper()
+		then := time.Now().Add(-age)
+		if err := os.Chtimes(path, then, then); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := creatingWorktreeGrace + time.Hour
+	young := 2 * removedWorktreeGrace
+
+	// Dead creations, the working directory gone with the daemon's run.
+	deadCreation := func(name string, age time.Duration) string {
+		t.Helper()
+		wt := filepath.Join(t.TempDir(), name)
+		if err := WorktreeAdd(f.ctx, f.bare, wt, f.sha); err != nil {
+			t.Fatalf("worktree add %s: %v", name, err)
+		}
+		admin := filepath.Join(f.bare, "worktrees", name)
+		killCreation(t, admin)
+		if err := os.RemoveAll(wt); err != nil {
+			t.Fatal(err)
+		}
+		setAge(filepath.Join(admin, worktreeAdminLocked), age)
+		return admin
+	}
+	oldCreation := deadCreation("run-2", old)
+	youngCreation := deadCreation("run-3", young)
+
+	// Staging directories of creations that died before the rename.
+	staging := func(age time.Duration) string {
+		t.Helper()
+		root := filepath.Join(f.bare, newWorktreeStaging)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dir, err := os.MkdirTemp(root, "wt-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, worktreeAdminLocked), []byte(creatingWorktreeLockReason), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		setAge(dir, age)
+		return dir
+	}
+	oldStaging := staging(old)
+	youngStaging := staging(young)
+
+	// A worktree that died between being listed and being unlocked works, and
+	// is never swept.
+	listed := filepath.Join(t.TempDir(), "run-4")
+	if err := WorktreeAdd(f.ctx, f.bare, listed, f.sha); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
+	listedLock := filepath.Join(f.bare, "worktrees", "run-4", worktreeAdminLocked)
+	if err := os.WriteFile(listedLock, []byte(creatingWorktreeLockReason), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setAge(listedLock, old)
+
+	// Nor is an unlisted entry somebody else locked.
+	foreign := filepath.Join(t.TempDir(), "run-5")
+	if err := WorktreeAdd(f.ctx, f.bare, foreign, f.sha); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
+	foreignAdmin := filepath.Join(f.bare, "worktrees", "run-5")
+	if err := os.WriteFile(filepath.Join(foreignAdmin, worktreeAdminLocked), []byte("on a portable drive\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(foreignAdmin, worktreeAdminGitdir)); err != nil {
+		t.Fatal(err)
+	}
+	setAge(filepath.Join(foreignAdmin, worktreeAdminLocked), old)
+
+	// The sweep runs in a removal.
+	if err := WorktreeRemove(f.ctx, f.bare, f.wt); err != nil {
+		t.Fatalf("WorktreeRemove: %v", err)
+	}
+
+	if _, err := os.Lstat(oldCreation); !os.IsNotExist(err) {
+		t.Fatalf("a dead creation older than the grace period was not swept (lstat error %v)", err)
+	}
+	if names := adminEntryNames(t, filepath.Join(f.bare, removedWorktreeTrash)); len(names) != 0 {
+		t.Fatalf("the sweep left %v in its trash directory", names)
+	}
+	if _, err := os.Lstat(oldStaging); !os.IsNotExist(err) {
+		t.Fatalf("a staging directory older than the grace period was not swept (lstat error %v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(youngCreation, worktreeAdminGitdirPending)); err != nil {
+		t.Fatalf("a dead creation younger than the grace period was swept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(youngStaging, worktreeAdminLocked)); err != nil {
+		t.Fatalf("a staging directory younger than the grace period was swept: %v", err)
+	}
+	if got, err := Run(f.ctx, listed, "rev-parse", "HEAD"); err != nil || got != f.sha {
+		t.Fatalf("listed worktree after the sweep: rev-parse = %q, %v", got, err)
+	}
+	if _, err := os.Stat(listedLock); err != nil {
+		t.Fatalf("a listed worktree under the creation lock was swept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(foreignAdmin, "HEAD")); err != nil {
+		t.Fatalf("an entry somebody else locked was swept: %v", err)
+	}
+}
