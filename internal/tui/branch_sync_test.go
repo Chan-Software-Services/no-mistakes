@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -73,22 +74,22 @@ func TestBranchSyncActionRefreshesBeforeConfirmationAndAppliesThroughSharedPath(
 
 func TestLocalBranchStatusIsCompactAndOnlyOffersEligibleAction(t *testing.T) {
 	state := branchsync.State{State: branchsync.StateBehind, Safety: "refresh_required"}
-	view := stripANSI(renderLocalBranchStatus(&state, false, 80))
+	view := localBranchView(t, &state)
 	if !strings.Contains(view, "Safe fast-forward available after refresh") || !strings.Contains(view, "u sync branch") {
 		t.Fatalf("behind view:\n%s", view)
 	}
 	state.State = branchsync.StateDiverged
-	view = stripANSI(renderLocalBranchStatus(&state, false, 80))
+	view = localBranchView(t, &state)
 	if !strings.Contains(view, "diverged") || strings.Contains(view, "u sync branch") {
 		t.Fatalf("diverged view:\n%s", view)
 	}
 	state.NextAction = &branchsync.NextAction{Code: "sync", Command: "no-mistakes axi sync"}
-	view = stripANSI(renderLocalBranchStatus(&state, false, 80))
+	view = localBranchView(t, &state)
 	if !strings.Contains(view, "equivalent work") || !strings.Contains(view, "u sync branch") {
 		t.Fatalf("equivalent candidate view:\n%s", view)
 	}
 	state.Safety = branchsync.SafetySafeEquivalentAdvance
-	view = stripANSI(renderLocalBranchStatus(&state, false, 80))
+	view = localBranchView(t, &state)
 	if !strings.Contains(view, "represented in the live pipeline head") || strings.Contains(view, "No automatic reconciliation") {
 		t.Fatalf("equivalent live view:\n%s", view)
 	}
@@ -173,7 +174,7 @@ func TestMissingPreservedHeadStatusShowsKeepLocalRecoveryCommand(t *testing.T) {
 
 	// The TUI is a person's surface, so it names the human command, whose
 	// output is human text, never the agent's axi form from the next action.
-	view := stripANSI(renderLocalBranchStatus(&state, false, 80))
+	view := localBranchView(t, &state)
 	if !strings.Contains(view, "`no-mistakes sync --recover --keep-local`") {
 		t.Errorf("missing-head status did not show the human recovery command:\n%s", view)
 	}
@@ -197,7 +198,7 @@ func TestRecoverableCustodyActionFlowsThroughConfirmationAndRecoverService(t *te
 	}
 	m.branchSync = &stranded
 
-	view := stripANSI(renderLocalBranchStatus(m.branchSync, false, 80))
+	view := localBranchView(t, m.branchSync)
 	for _, want := range []string{"preserved in the local gate", "Recover custody", "u recover custody"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("recoverable status missing %q:\n%s", want, view)
@@ -246,7 +247,7 @@ func TestRecoverableCustodyActionFlowsThroughConfirmationAndRecoverService(t *te
 		t.Fatalf("successful recovery left an error: %v", m.err)
 	}
 
-	returned := stripANSI(renderLocalBranchStatus(m.branchSync, false, 80))
+	returned := localBranchView(t, m.branchSync)
 	if !strings.Contains(returned, "Custody returned") {
 		t.Fatalf("custody_returned status:\n%s", returned)
 	}
@@ -281,7 +282,7 @@ func TestArchiveRecoveryConfirmationUsesOnlyGuardedKeepLocalAction(t *testing.T)
 		return recovered
 	}
 
-	view := stripANSI(renderLocalBranchStatus(m.branchSync, false, 80))
+	view := localBranchView(t, m.branchSync)
 	for _, want := range []string{"verified archive", "exact required local head", "u recover custody"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("archive status missing %q:\n%s", want, view)
@@ -324,7 +325,7 @@ func TestActivePipelineOwnedStateOffersNoRecoveryAction(t *testing.T) {
 		t.Fatal("recover service must not be reachable for an active run")
 		return branchsync.State{}
 	}
-	view := stripANSI(renderLocalBranchStatus(m.branchSync, false, 80))
+	view := localBranchView(t, m.branchSync)
 	if strings.Contains(view, "recover") || !strings.Contains(view, "Do not make follow-up commits") {
 		t.Fatalf("active pipeline_owned view:\n%s", view)
 	}
@@ -333,4 +334,28 @@ func TestActivePipelineOwnedStateOffersNoRecoveryAction(t *testing.T) {
 	if cmd != nil || m.recoverConfirm || m.syncConfirm {
 		t.Fatalf("u acted on an active pipeline_owned state: %#v", m)
 	}
+}
+
+// localBranchView renders the Local branch box at 80 columns, fails the test
+// when any line does not fit the box exactly, and returns the box with its
+// wrapped message joined back onto one line, between the top and bottom
+// borders, so a test can match a phrase wherever the wrap fell.
+func localBranchView(t *testing.T, state *branchsync.State) string {
+	t.Helper()
+	const width = 80
+	view := stripANSI(renderLocalBranchStatus(state, false, width))
+	lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
+	for _, line := range lines {
+		if got := lipgloss.Width(line); got != width {
+			t.Errorf("Local branch line is %d columns wide, want %d:\n%s", got, width, view)
+		}
+	}
+	if len(lines) < 3 {
+		t.Fatalf("Local branch box has no message line:\n%s", view)
+	}
+	message := make([]string, 0, len(lines)-2)
+	for _, line := range lines[1 : len(lines)-1] {
+		message = append(message, strings.TrimSpace(strings.Trim(line, "│")))
+	}
+	return lines[0] + "\n" + strings.Join(message, " ") + "\n" + lines[len(lines)-1]
 }
