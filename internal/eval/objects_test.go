@@ -29,9 +29,10 @@ import (
 // doubles the corpus, and with a shared object pool it adds almost nothing.
 func TestCaptureDoesNotCopyRepositoryHistoryPerCase(t *testing.T) {
 	ctx := context.Background()
-	// Capture's object-pool fetch would start a detached auto-maintenance
-	// whose lock file can vanish between dirSize listing it and reading its
-	// size.
+	// Capture's object-pool fetch otherwise starts a detached
+	// auto-maintenance in the pool, inside the tree dirSize walks; no run has
+	// yet shown that tree changing under the walk, and the trace check below
+	// keeps the start from coming back.
 	testgit.IgnoreUserGitConfig(t)
 	trace := testgit.TraceGit(t)
 	testgit.TurnOffAutoMaintenance(t)

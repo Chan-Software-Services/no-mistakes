@@ -149,8 +149,10 @@ func TestEvalCaptureSetsReportAndRelabelAreIdempotentAtTheCLI(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
-	// eval capture's object-pool fetch would start a detached
-	// auto-maintenance whose lock file can come and go between the two walks.
+	// eval capture's object-pool fetch and the fixture's commits and pushes
+	// otherwise start detached auto-maintenance inside the tree nmHomeTree
+	// walks; no run has yet shown that tree changing between the walks, and
+	// the trace check at the end keeps the starts from coming back.
 	testgit.IgnoreUserGitConfig(t)
 	trace := testgit.TraceGit(t)
 	testgit.TurnOffAutoMaintenance(t)
