@@ -16,8 +16,13 @@ import (
 
 var syncInteractive = terminalInteractive
 
+// axiReplacePublishedRefusal is all `axi sync --replace-published` does:
+// replacing a published head is a person's decision, so the agent surface
+// refuses it and names the human command.
+const axiReplacePublishedRefusal = "--replace-published is the operator's decision: a person runs `no-mistakes sync --replace-published`; no files or gate refs were changed"
+
 func newSyncCmd() *cobra.Command {
-	var check, yes, recover, keepLocal, adoptPublished bool
+	var check, yes, recover, keepLocal, adoptPublished, replacePublished bool
 	var bindArchiveRef string
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -42,9 +47,21 @@ func newSyncCmd() *cobra.Command {
 			"a divergent later head remains archived; it never creates or moves a Git ref.\n" +
 			"--adopt-published moves a stale custody-returned gate lane only after the\n" +
 			"configured push target proves the exact divergent local head is already\n" +
-			"published there.",
+			"published there.\n" +
+			"--replace-published is the operator's decision when a finished run's\n" +
+			"published head is not contained in the clean local history: after the\n" +
+			"confirmation it pins the published head in the gate, makes the gate branch\n" +
+			"follow the local head, and returns custody, so the next run publishes the\n" +
+			"local history over the remote branch. It never changes the worktree, the\n" +
+			"local branch, or the remote.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if replacePublished && (check || recover || keepLocal || adoptPublished || bindArchiveRef != "") {
+				return &exitError{code: 2, err: fmt.Errorf("--replace-published cannot be combined with --check, --recover, --keep-local, --adopt-published, or --bind-archive-ref")}
+			}
+			if replacePublished {
+				return runHumanReplacePublished(cmd, yes)
+			}
 			if check && yes {
 				return &exitError{code: 2, err: fmt.Errorf("--check and --yes cannot be used together")}
 			}
@@ -75,11 +92,12 @@ func newSyncCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
 	cmd.Flags().BoolVar(&adoptPublished, "adopt-published", false, "adopt a clean diverged local head into its stale gate lane only when the configured push target already has that exact head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
+	cmd.Flags().BoolVar(&replacePublished, "replace-published", false, "after confirmation, make the gate follow the clean local history in place of a finished run's published head it does not contain; the next run publishes it")
 	return cmd
 }
 
 func newAxiSyncCmd() *cobra.Command {
-	var check, recover, keepLocal, adoptPublished bool
+	var check, recover, keepLocal, adoptPublished, replacePublished bool
 	var bindArchiveRef string
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -96,11 +114,16 @@ func newAxiSyncCmd() *cobra.Command {
 			"--bind-archive-ref binds one exact existing refs/heads/archive/* commit to\n" +
 			"the selected terminal run; it never creates or moves a Git ref.\n" +
 			"--adopt-published performs the guarded gate-lane recovery offered by\n" +
-			"next_action.code: adopt_published.",
+			"next_action.code: adopt_published.\n" +
+			"--replace-published only refuses: replacing a published head is the\n" +
+			"operator's decision, made with the human `no-mistakes sync` command.",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if replacePublished {
+				return emitError(cmd, 2, axiReplacePublishedRefusal)
+			}
 			if (check && recover) || (check && adoptPublished) || (recover && adoptPublished) {
 				return emitError(cmd, 2, "choose only one of --check, --recover, and --adopt-published")
 			}
@@ -118,6 +141,7 @@ func newAxiSyncCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&keepLocal, "keep-local", false, "with --recover: keep the current local head; anchor available preserved commits, discard genuinely missing ones, and make the gate follow the kept head")
 	cmd.Flags().BoolVar(&adoptPublished, "adopt-published", false, "adopt a clean diverged local head into its stale gate lane only when the configured push target already has that exact head")
 	cmd.Flags().StringVar(&bindArchiveRef, "bind-archive-ref", "", "bind one existing refs/heads/archive/* commit as exact keep-local recovery evidence without changing Git refs")
+	cmd.Flags().BoolVar(&replacePublished, "replace-published", false, "refused here: replacing a published head is the operator's decision (`no-mistakes sync --replace-published`)")
 	return cmd
 }
 
@@ -361,6 +385,77 @@ func runHumanAdoptPublished(cmd *cobra.Command, yes bool) error {
 	return &exitError{code: 1}
 }
 
+func runHumanReplacePublished(cmd *cobra.Command, yes bool) error {
+	started := time.Now()
+	var observed branchsync.State
+	result := "error"
+	defer func() { trackSyncAttempt("sync", "human_cli", "replace_published", observed, result, started) }()
+
+	service, closeFn, err := openSyncService()
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	plan, planned, ok := service.PlanReplacePublished(cmd.Context())
+	observed = planned
+	if !ok {
+		printHumanSyncState(cmd, planned)
+		result = "refused"
+		return &exitError{code: 1}
+	}
+	printReplacePublishedPlan(cmd, plan)
+	if !yes {
+		if !syncInteractive() {
+			fmt.Fprintln(cmd.OutOrStdout(), "  Non-interactive input cannot confirm this. Re-run with `no-mistakes sync --replace-published --yes`.")
+			result = "refused"
+			return &exitError{code: 1}
+		}
+		fmt.Fprint(cmd.OutOrStdout(), "  Replace the published head with this local history on the gate? The next run will publish it over the remote branch. [y/N] ")
+		line, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		if readErr != nil && strings.TrimSpace(line) == "" {
+			return readErr
+		}
+		answer := strings.ToLower(strings.TrimSpace(line))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(cmd.OutOrStdout(), "  Cancelled; no files or refs were changed.")
+			result = "cancelled"
+			return nil
+		}
+	}
+
+	state := service.ReplacePublished(cmd.Context())
+	observed = state
+	printHumanSyncState(cmd, state)
+	if state.Changed && state.State == branchsync.StateCustodyReturned {
+		fmt.Fprintf(cmd.OutOrStdout(), "  The published head %s is pinned at refs/no-mistakes/recover/%s in the gate; the next run publishes this local history.\n", plan.PublishedHead, state.Pipeline.RunID)
+		result = "applied"
+		return nil
+	}
+	result = "refused"
+	return &exitError{code: 1}
+}
+
+// printReplacePublishedPlan shows what leaves the branch before a person
+// confirms the replacement.
+func printReplacePublishedPlan(cmd *cobra.Command, plan branchsync.ReplacePublishedPlan) {
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "\n  branch:    %s\n", plan.Branch)
+	fmt.Fprintf(w, "  published: %s\n", plan.PublishedHead)
+	fmt.Fprintf(w, "  local:     %s\n", plan.LocalHead)
+	fmt.Fprintln(w, "  Published commits the local history lacks:")
+	if !plan.LocallyAvailable {
+		fmt.Fprintln(w, "    not available locally")
+		return
+	}
+	for _, commit := range plan.Commits {
+		fmt.Fprintf(w, "    %s %s\n", commit.ShortSHA, commit.Subject)
+	}
+	if plan.MoreCommits > 0 {
+		fmt.Fprintf(w, "    and %d more\n", plan.MoreCommits)
+	}
+}
+
 func printHumanSyncState(cmd *cobra.Command, state branchsync.State) {
 	w := cmd.OutOrStdout()
 	fmt.Fprintf(w, "\n  Local branch: %s\n", humanSyncSummary(state))
@@ -400,6 +495,9 @@ func humanSyncSummary(state branchsync.State) string {
 	case branchsync.StateCustodyReturned:
 		if state.Safety == "recovery_required" && state.NextAction != nil {
 			return "a rebased local head needs guarded gate-lane adoption before it can start a fresh run"
+		}
+		if state.Safety == "gate_ready" && state.Pipeline.PushedHead != "" {
+			return "the gate follows this local history in place of the published head; start a fresh run to publish it"
 		}
 		if state.Safety == "gate_ready" {
 			return "the published rebased head is present in this gate lane; start a fresh run when ready"

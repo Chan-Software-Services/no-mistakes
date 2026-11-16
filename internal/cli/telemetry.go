@@ -16,7 +16,7 @@ import (
 // per-command status and duration. It fires at command entry so the surface is
 // recorded even when the command later fails. fields may be nil.
 //
-// Read-only polling surfaces (axi home/status/logs, status, runs) must not
+// Read-only polling surfaces (axi home/status/logs/findings, status, runs) must not
 // call this or trackCommand: agent status loops made those events the
 // dominant remote telemetry volume. Mutation and lifecycle surfaces stay
 // full-fidelity.

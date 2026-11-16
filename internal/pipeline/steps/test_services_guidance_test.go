@@ -26,7 +26,7 @@ func TestTestStep_PromptsGiveTheRunsDockerLabelAndCleanup(t *testing.T) {
 		ag := &mockAgent{
 			name: "test",
 			runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
-				return &agent.Result{Output: json.RawMessage(`{"summary":"fix tests","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the behaviour","artifacts":[],"scenarios":[{"name":"the behaviour works for a user","result":"pass","live":true,"evidence":"go test ./...","reason":""}],"verdict":"go"}`)}, nil
+				return &agent.Result{Output: json.RawMessage(`{"summary":"fix tests","findings":[],"tested":["go test ./..."],"testing_summary":"re-verified the behaviour","artifacts":[],"scenarios":[{"name":"the behaviour works for a user","result":"pass","live":true,"evidence":"the repaired behaviour passed its focused test","reason":""}],"verdict":"go"}`)}, nil
 			},
 		}
 		sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})

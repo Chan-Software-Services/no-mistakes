@@ -53,3 +53,16 @@ func RecoveryLocalRef(runID string) string {
 func RecoveryGateRef(runID string) string {
 	return "refs/no-mistakes/recover-gate/" + runID
 }
+
+// PublishedHeadPinned reports whether the gate pins exactly published at the
+// run's recovery ref. A run whose own published head is pinned there and whose
+// custody was returned is a run whose published head an operator replaced with
+// the local history (`no-mistakes sync --replace-published`): no other
+// recovery pins a published head, because they all recover unpublished ones.
+func PublishedHeadPinned(ctx context.Context, gateDir, runID, published string) bool {
+	if strings.TrimSpace(published) == "" {
+		return false
+	}
+	pinned, exists, err := git.ExactRefTarget(ctx, gateDir, RecoveryRef(runID))
+	return err == nil && exists && pinned == published
+}

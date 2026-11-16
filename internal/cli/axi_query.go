@@ -184,10 +184,12 @@ func startRunHelp() string {
 	return `Run no-mistakes axi run --intent "the user's goal" --yes to validate the current branch`
 }
 
-func noRunLogsHelp() []string {
+// noRunStepHelp is the help a per-step read command (verb: logs, findings)
+// gives when the current branch has no run.
+func noRunStepHelp(verb string) []string {
 	return []string{
 		startRunHelp(),
-		"To read another branch's run, name it: `no-mistakes axi logs --run <id> --step <step>`",
+		"To read another branch's run, name it: `no-mistakes axi " + verb + " --run <id> --step <step>`",
 	}
 }
 
@@ -217,44 +219,60 @@ func newAxiLogsCmd() *cobra.Command {
 const validLogStepsHelp = "Valid steps: intent, rebase, review, test, document, lint, push, pr, ci, " +
 	"or a repository gate step name as shown in `no-mistakes axi status` (for example gate.test.mutation-budget)"
 
-// runAxiLogs renders a step log. It is a read-only query: it does not emit
-// telemetry.
-func runAxiLogs(cmd *cobra.Command, step, runID string, full bool) error {
-	step = strings.TrimSpace(step)
+// resolveAxiStepRun is the shared front of the per-step read commands, `axi
+// logs` and `axi findings` (verb is the command's own name): it checks --step,
+// opens the query environment, and resolves the run with resolveRun for the
+// caller's current branch, so neither command can fall back to another
+// branch's run and an explicit --run is observation only. It emits its own
+// error and returns it, with a nil env, when it cannot resolve one; otherwise
+// the caller closes env.
+func resolveAxiStepRun(cmd *cobra.Command, verb, step, runID string) (*axiEnv, *db.Run, error) {
 	if step == "" {
-		return emitError(cmd, 2, "--step is required",
-			validLogStepsHelp)
+		return nil, nil, emitError(cmd, 2, "--step is required", validLogStepsHelp)
 	}
 	if !validReadableStep(types.StepName(step)) {
-		return emitError(cmd, 2, fmt.Sprintf("unknown step %q", step),
-			validLogStepsHelp)
+		return nil, nil, emitError(cmd, 2, fmt.Sprintf("unknown step %q", step), validLogStepsHelp)
 	}
 
 	env, err := openAxiQueryEnv(runID)
 	if err != nil {
-		return emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
+		return nil, nil, emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
 	}
-	defer env.close()
+	fail := func(err error) (*axiEnv, *db.Run, error) {
+		env.close()
+		return nil, nil, err
+	}
 
 	branch, branchErr := currentBranchForRunResolve(cmd.Context())
 	if branchErr != nil && runID == "" {
-		return emitError(cmd, 1, branchErr.Error())
+		return fail(emitError(cmd, 1, branchErr.Error()))
 	}
 	run, _, err := resolveRun(env, runID, branch)
 	if err != nil {
-		return emitError(cmd, 1, err.Error())
+		return fail(emitError(cmd, 1, err.Error()))
 	}
 	if run == nil {
 		if runID != "" {
-			return emitError(cmd, 1, fmt.Sprintf("run %q not found", runID))
+			return fail(emitError(cmd, 1, fmt.Sprintf("run %q not found", runID)))
 		}
-		help := noRunLogsHelp()
+		help := noRunStepHelp(verb)
 		if branch == "" {
-			help = []string{"This worktree has no current branch (detached HEAD), so no run can be attributed to it; inspect a specific run with `no-mistakes axi logs --run <id> --step <step>`, or check out a branch first"}
+			help = []string{"This worktree has no current branch (detached HEAD), so no run can be attributed to it; inspect a specific run with `no-mistakes axi " + verb + " --run <id> --step <step>`, or check out a branch first"}
 		}
-		return emitError(cmd, 1, "no run found for this branch to read logs from",
-			help...)
+		return fail(emitError(cmd, 1, "no run found for this branch to read "+verb+" from", help...))
 	}
+	return env, run, nil
+}
+
+// runAxiLogs renders a step log. It is a read-only query: it does not emit
+// telemetry.
+func runAxiLogs(cmd *cobra.Command, step, runID string, full bool) error {
+	step = strings.TrimSpace(step)
+	env, run, err := resolveAxiStepRun(cmd, "logs", step, runID)
+	if err != nil {
+		return err
+	}
+	defer env.close()
 	if _, err := env.d.GetStepsByRun(run.ID); err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("load steps: %v", err))
 	}

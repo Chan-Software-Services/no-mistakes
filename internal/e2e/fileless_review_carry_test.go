@@ -67,12 +67,12 @@ func TestFilelessSelectedReviewFindingRequiresCompleteVerification(t *testing.T)
       risk_rationale: "none"
       risk_scope: source-or-external
       tested: ["fixture"]
-      testing_summary: "fixture"
+      testing_summary: "fixture validation passed"
       scenarios:
-        - name: "fixture"
+        - name: "the fixture journey completes"
           result: pass
           live: true
-          evidence: "fixture"
+          evidence: "the fixture journey completed"
           reason: ""
       verdict: go
       artifacts: []

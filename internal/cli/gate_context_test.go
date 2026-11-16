@@ -30,6 +30,7 @@ func TestGateControlPolicyCoversEveryMutationEntrypoint(t *testing.T) {
 		{args: []string{"axi", "abort"}, mutates: true},
 		{args: []string{"axi", "status"}, mutates: false},
 		{args: []string{"axi", "logs"}, mutates: false},
+		{args: []string{"axi", "findings"}, mutates: false},
 		{args: []string{"status"}, mutates: false},
 		{args: []string{"doctor"}, mutates: false},
 		{args: []string{"daemon", "stop", "--force"}, mutates: true},
@@ -73,7 +74,9 @@ func TestGateContextRefusalIsStructuredActionableAndPrivacySafe(t *testing.T) {
 		"run: run-safe",
 		"phase: document",
 		"enclosing executor owns validation, push, PR, and CI",
-		"no-mistakes axi status",
+		"no-mistakes axi status --run run-safe",
+		"no-mistakes axi logs --run run-safe --step <phase>",
+		"no-mistakes axi findings --run run-safe --step <phase>",
 		"Return control to the outer executor",
 	} {
 		if !strings.Contains(text, want) {

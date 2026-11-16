@@ -89,7 +89,6 @@ func (s *RebaseStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome,
 		findingsJSON, _ := json.Marshal(Findings{
 			Items: []Finding{{
 				Severity:    "warning",
-				File:        filepath.Join("internal", "pipeline", "steps", "rebase.go"),
 				Description: fmt.Sprintf("origin/%s advanced after the force push; manual review required before updating the default branch", defaultBranch),
 			}},
 			Summary: fmt.Sprintf("remote %s advanced during force push", defaultBranch),

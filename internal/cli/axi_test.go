@@ -824,7 +824,7 @@ func TestStatusEmptyHelpIncludesRequiredIntent(t *testing.T) {
 }
 
 func TestLogsNoRunHelpIncludesRequiredIntent(t *testing.T) {
-	help := strings.Join(noRunLogsHelp(), "\n")
+	help := strings.Join(noRunStepHelp("logs"), "\n")
 	if !strings.Contains(help, "--intent") {
 		t.Fatalf("no-run logs help must include required --intent, got %q", help)
 	}

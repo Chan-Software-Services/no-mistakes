@@ -210,3 +210,30 @@ func TestFallbackAgent_AlreadyExpiredContextStartsNoCandidate(t *testing.T) {
 		t.Fatalf("calls = first %d second %d, want 0/0", first.calls, second.calls)
 	}
 }
+
+// TestFallbackAgent_KeepsTheResultBesideAnError: an error that does not move
+// to the next candidate returns with the candidate's Result, so what the
+// adapter reported beside it (its refused structured outputs) reaches the
+// caller.
+func TestFallbackAgent_KeepsTheResultBesideAnError(t *testing.T) {
+	refused := []RefusedOutput{{Payload: `{"verdict":"go"}`, Reason: "refused"}}
+	runErr := errors.New("claude error: subtype=error_max_structured_output_retries")
+	first := &fallbackTestAgent{
+		name: "claude",
+		run: func() (*Result, error) {
+			return &Result{RefusedOutputs: refused}, runErr
+		},
+	}
+	second := &fallbackTestAgent{name: "codex", run: func() (*Result, error) { return &Result{Text: "should not run"}, nil }}
+
+	result, err := NewFallback([]Agent{first, second}).Run(context.Background(), RunOpts{})
+	if !errors.Is(err, runErr) {
+		t.Fatalf("Run() error = %v, want %v", err, runErr)
+	}
+	if result == nil || len(result.RefusedOutputs) != 1 {
+		t.Fatalf("Run() result = %+v, want the candidate's Result beside the error", result)
+	}
+	if second.calls != 0 {
+		t.Fatalf("second calls = %d, want 0", second.calls)
+	}
+}

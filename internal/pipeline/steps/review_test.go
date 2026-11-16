@@ -36,7 +36,7 @@ func cleanReviewFindings() Findings {
 			Name:     "the change works for a user",
 			Result:   types.ScenarioResultPass,
 			Live:     true,
-			Evidence: "go test ./...",
+			Evidence: "the changed behaviour passed its end-to-end check",
 		}},
 		Verdict:       types.TestVerdictGo,
 		RiskLevel:     "low",

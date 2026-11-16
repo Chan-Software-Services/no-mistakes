@@ -24,7 +24,8 @@ var nowUnix = func() int64 { return time.Now().Unix() }
 
 // maxFindingDesc caps a finding description rendered inline. Findings are the
 // decision content at a gate, so the limit is generous; only pathological
-// descriptions get truncated, with the full length disclosed.
+// descriptions get truncated, with the full length disclosed, and the gate's
+// help then names `axi findings`, which prints them whole (gateLogHelp).
 const (
 	maxFindingDesc = 600
 	maxGateSummary = 1200
@@ -577,19 +578,18 @@ func gateFields(gate stepView) []toon.Field {
 		}
 		skip = "Do not skip this step: the steps after Test would commit and publish the unvalidated work, so skipping needs the operator's explicit decision"
 	}
+	help = append(help, skip)
+	help = append(help, gateLogHelp(gate, "")...)
 	return gateFieldsWithHelp(gate, append(help,
-		skip,
-		fmt.Sprintf("Run `%s` to read the full step log", axiLogsFullCommand(gate.Name, "")),
 		"A long-running call is working, not stalled - background it if your harness needs to, but the run never advances past a gate on its own. Read every return; on a `gate:`, respond; loop until an `outcome:`.",
 		preserveGateFixCommitsGuidance,
 	))
 }
 
 func inspectionOnlyGateFields(gate stepView, runID string) []toon.Field {
-	return gateFieldsWithHelp(gate, []string{
+	return gateFieldsWithHelp(gate, append([]string{
 		fmt.Sprintf("The explicitly selected gate for run %s is inspection-only; no run-scoped response command exists", runID),
-		fmt.Sprintf("Run `%s` to read the full step log", axiLogsFullCommand(gate.Name, runID)),
-	})
+	}, gateLogHelp(gate, runID)...))
 }
 
 func gateFieldsWithHelp(gate stepView, help []string) []toon.Field {

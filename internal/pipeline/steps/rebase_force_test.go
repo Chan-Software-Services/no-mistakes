@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 func TestRebaseStep_ForcePushSkipsOriginBranch(t *testing.T) {
@@ -205,6 +207,54 @@ func TestRebaseStep_ForcePushOnDefaultBranchAllowsRewrittenRemoteHead(t *testing
 
 func TestRebaseStep_ForcePushOnDefaultBranchStopsWhenRemoteAdvanced(t *testing.T) {
 	t.Parallel()
+	dir, userCommitSHA, outcome := runForcePushOnDefaultBranchAfterRemoteAdvanced(t)
+	if !outcome.NeedsApproval {
+		t.Fatal("expected approval when remote default branch advanced after force push")
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != userCommitSHA {
+		t.Fatalf("HEAD = %s, want %s", got, userCommitSHA)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "remote.txt")); !os.IsNotExist(err) {
+		t.Fatal("expected remote update to remain unapplied")
+	}
+}
+
+// The finding tells the operator what to review in their repository, so it
+// must not point at a no-mistakes source file: it carries no file at all.
+func TestRebaseStep_ForcePushOnDefaultBranchRemoteAdvancedFindingNamesNoFile(t *testing.T) {
+	t.Parallel()
+	_, _, outcome := runForcePushOnDefaultBranchAfterRemoteAdvanced(t)
+	if !outcome.NeedsApproval {
+		t.Fatal("expected approval when remote default branch advanced after force push")
+	}
+	findings, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatalf("parse findings: %v\n%s", err, outcome.Findings)
+	}
+	if len(findings.Items) != 1 {
+		t.Fatalf("findings = %d, want 1: %s", len(findings.Items), outcome.Findings)
+	}
+	got := findings.Items[0]
+	if got.File != "" || got.Line != 0 {
+		t.Fatalf("finding file = %q line %d, want none", got.File, got.Line)
+	}
+	if got.Severity != "warning" || got.Action != "" {
+		t.Fatalf("finding severity %q action %q, want warning and no action", got.Severity, got.Action)
+	}
+	const wantDesc = "origin/main advanced after the force push; manual review required before updating the default branch"
+	if got.Description != wantDesc {
+		t.Fatalf("finding description = %q, want %q", got.Description, wantDesc)
+	}
+	if findings.Summary != "remote main advanced during force push" {
+		t.Fatalf("summary = %q", findings.Summary)
+	}
+}
+
+// runForcePushOnDefaultBranchAfterRemoteAdvanced force-pushes main back to the
+// user's commit while another clone has advanced origin/main, runs the Rebase
+// step, and returns the worktree, the user's commit and the step's outcome.
+func runForcePushOnDefaultBranchAfterRemoteAdvanced(t *testing.T) (string, string, *pipeline.StepOutcome) {
+	t.Helper()
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 
@@ -254,15 +304,7 @@ func TestRebaseStep_ForcePushOnDefaultBranchStopsWhenRemoteAdvanced(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !outcome.NeedsApproval {
-		t.Fatal("expected approval when remote default branch advanced after force push")
-	}
-	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != userCommitSHA {
-		t.Fatalf("HEAD = %s, want %s", got, userCommitSHA)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "remote.txt")); !os.IsNotExist(err) {
-		t.Fatal("expected remote update to remain unapplied")
-	}
+	return dir, userCommitSHA, outcome
 }
 
 func TestRebaseStep_NormalPushSyncsOriginBranch(t *testing.T) {

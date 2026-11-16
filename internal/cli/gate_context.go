@@ -111,10 +111,11 @@ func emitGateContextRefusal(cmd *cobra.Command, result gatecontext.Result) error
 	if result.Phase != "" {
 		errorFields = append(errorFields, toon.Field{Key: "phase", Value: string(result.Phase)})
 	}
-	allowed := []string{"no-mistakes axi status", "no-mistakes axi logs --step <phase>", "no-mistakes doctor"}
+	allowed := []string{"no-mistakes axi status", "no-mistakes axi logs --step <phase>", "no-mistakes axi findings --step <phase>", "no-mistakes doctor"}
 	if result.RunID != "" {
 		allowed[0] = "no-mistakes axi status --run " + result.RunID
 		allowed[1] = "no-mistakes axi logs --run " + result.RunID + " --step <phase>"
+		allowed[2] = "no-mistakes axi findings --run " + result.RunID + " --step <phase>"
 	}
 	emitDoc(cmd,
 		toon.Field{Key: "error", Value: toon.NewObject(errorFields...)},

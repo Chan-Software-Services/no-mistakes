@@ -11,7 +11,7 @@ The default `agent: auto` setting picks the first supported native agent or ACP 
 The coding agent that calls `no-mistakes axi` drives approval gates, but it does not automatically become the pipeline agent that performs review, evidence testing, documentation, combined documentation-and-lint housekeeping, or fixes.
 Those jobs run in the daemon's disposable worktree through the configured pipeline agent.
 A validation-step agent inspects, fixes, and returns only its assigned phase; delivery requirements in user intent remain acceptance context, but the outer executor alone performs the other validation, push, PR, and CI phases.
-If that step attempts pipeline control, no-mistakes returns `error.code: nested_gate_context`; the agent must return control to the outer executor, while read-only `no-mistakes axi status`, `no-mistakes axi logs`, help, and `no-mistakes doctor` remain available.
+If that step attempts pipeline control, no-mistakes returns `error.code: nested_gate_context`; the agent must return control to the outer executor, while read-only `no-mistakes axi status`, `no-mistakes axi logs`, `no-mistakes axi findings`, help, and `no-mistakes doctor` remain available.
 
 The agent is responsible for the parts of the gate that benefit from judgment:
 code review, evidence-oriented test validation, test or lint detection when you
@@ -176,6 +176,7 @@ no-mistakes axi sync --recover
 no-mistakes axi sync --adopt-published
 no-mistakes axi respond --action approve
 no-mistakes axi logs --step review --full
+no-mistakes axi findings --step review
 no-mistakes axi abort
 no-mistakes axi abort --run <id>
 ```
@@ -184,6 +185,7 @@ Before any post-pipeline local commit or fresh run, read `branch_sync` (`no-mist
 A `sync` action runs `no-mistakes axi sync` first.
 A `recover_custody` action is ordinary `no-mistakes axi sync --recover` to take a still-available preserved head, or `no-mistakes axi sync --recover --keep-local` when that head is unavailable and you are discarding the missing commits, or when a bound archive preserves divergent later work while custody returns at the reported required head; never substitute one action for the other. See [`no-mistakes rerun`](/no-mistakes/reference/cli/#no-mistakes-rerun) for the alternative validation path and its refusal conditions.
 An `adopt_published` action is `no-mistakes axi sync --adopt-published`: it verifies the configured push target already has the exact rebased local head, then updates only the stale gate lane. A target mismatch or target change refuses without replacing that lane.
+When the note on a `blocked_diverged` or `blocked_relation_unknown` state says replacing the published head is the operator's decision, stop and ask: only a person runs [`no-mistakes sync --replace-published`](/no-mistakes/reference/cli/#replacing-a-published-head), and `no-mistakes axi sync --replace-published` refuses.
 A `branch_sync.state` of `user_owned` means the run's outcome released the branch: it went terminal before changing the submitted head, or its only unpublished commits are clean merges of a base your branch has merged too. It is immediately usable and needs no sync action.
 When `next_action.code` is `continue_active_run`, run the reported command and keep driving the active run.
 If synchronization is blocked, process that state instead of improvising reset, stash, merge, rebase, force, or branch replacement.

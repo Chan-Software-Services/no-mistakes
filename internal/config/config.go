@@ -1269,15 +1269,15 @@ auto_fix:
 ci:
   rerun_transient: 0
   # Whether EVERY CI repair must re-pass the whole pipeline before it is
-  # published, or only the ones whose continuity with the reviewed head cannot
-  # be proven. Defaults to false: a repair that descends from the reviewed head
-  # is published through the same guarded push path the Push step uses and
-  # CI keeps monitoring, so one repair costs one agent round. A repair that
-  # cannot show that ancestry revalidates from Review anyway. A merge-conflict
-  # repair merges the PR's base onto the reviewed head, so it descends from it
-  # and publishes the same way. Set true to restart
-  # validation at Review for every repair - safer, and it pays for another full
-  # pipeline pass in wall clock and tokens every time CI is repaired. A
+  # published, or only the ones whose continuity with the reviewed head
+  # cannot be proven. Defaults to false: a repair that descends from the
+  # reviewed head is published through the same guarded push path the Push
+  # step uses and CI keeps monitoring, so one repair costs one agent round.
+  # A repair that cannot show that ancestry revalidates from Review anyway.
+  # A merge-conflict repair merges the PR's base onto the reviewed head, so
+  # it descends from it and publishes the same way. Set true to restart
+  # validation at Review for every repair - safer, and it pays for another
+  # full pipeline pass in wall clock and tokens every time CI is repaired. A
   # repository that sets ci.revalidate_repairs on its own default branch
   # overrides this value.
   revalidate_repairs: false

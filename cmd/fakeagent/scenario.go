@@ -73,6 +73,18 @@ type Action struct {
 	// directory, which the test prompt names and which lives outside the
 	// worktree by design.
 	WriteEvidence []EvidenceFile `yaml:"write_evidence,omitempty"`
+
+	// ClaudeStream are raw stream-json lines the Claude fake writes verbatim,
+	// one per line, in place of the fixture or its default events. It is how
+	// a journey replays a recorded session's shape: a StructuredOutput tool
+	// call, its tool_result, later turns, and the result events between them.
+	// Every other flavour ignores it.
+	ClaudeStream []string `yaml:"claude_stream,omitempty"`
+
+	// LingerMS keeps the Claude fake alive that long after its last line,
+	// with stdout still open, the way a session kept awake by a background
+	// task stays alive after its report. Every other flavour ignores it.
+	LingerMS int `yaml:"linger_ms,omitempty"`
 }
 
 // EvidenceFile is one test-evidence file written under the evidence directory
