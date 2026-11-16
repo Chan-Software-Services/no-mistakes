@@ -10,14 +10,32 @@ import (
 // embedded in the top border, per DESIGN.md Boxed Sections spec.
 func renderBox(title, content string, width int) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiCyan))
-	return renderBoxWithStyledTitle(titleStyle.Render(title), content, width, "")
+	return renderBoxWithStyledTitle(titleStyle.Render(fitBoxTitle(title, width)), content, width, "")
 }
 
 // renderBoxWithFooter renders a box with an optional hint embedded in the bottom border.
 // Per DESIGN.md Diff View: ╰──── ↓ 23 more lines (j/k) ─────────────╯
 func renderBoxWithFooter(title, content string, width int, footer string) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiCyan))
-	return renderBoxWithStyledTitle(titleStyle.Render(title), content, width, footer)
+	return renderBoxWithStyledTitle(titleStyle.Render(fitBoxTitle(title, width)), content, width, footer)
+}
+
+// fitBoxTitle cuts a plain title that a top border of width cannot hold
+// beside its corners, its spaces and one fill dash, so the border is never
+// wider than the box. A title that fits is returned unchanged.
+func fitBoxTitle(title string, width int) string {
+	if width < 6 {
+		width = 6
+	}
+	maxWidth := width - 6
+	if lipgloss.Width(title) <= maxWidth {
+		return title
+	}
+	if maxWidth < 1 {
+		return ""
+	}
+	cut, _ := cutText(title, maxWidth)
+	return strings.TrimRight(cut, " ")
 }
 
 // renderBoxWithStyledTitle renders a box with a pre-styled title and optional footer.

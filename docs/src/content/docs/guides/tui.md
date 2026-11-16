@@ -140,6 +140,7 @@ The ready signal is persisted, so a fresh attach shows `Checks passed` without d
 ### Local branch
 
 When the pipeline creates a fix commit in its isolated worktree, one compact `Local branch` box explains whether the invoking branch is unchanged, behind, dirty, diverged, synchronized, or retired after PR merge or close.
+It sits under the pipeline box and takes its width, so in the wide layout it stays inside the left column.
 Passive TUI rendering uses cached pipeline push provenance and never fetches or mutates the checkout.
 When a clean strict-behind relation is eligible, or a diverged relation may be equivalent after refresh, the box alone offers `u sync branch`.
 Pressing `u` explicitly refreshes the configured upstream or fork target, then opens a confirmation with both full SHAs, the exact target ref, and the clean-worktree proof.

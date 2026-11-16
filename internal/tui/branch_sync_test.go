@@ -403,3 +403,183 @@ func boxView(t *testing.T, rendered string) string {
 	}
 	return lines[0] + "\n" + strings.Join(content, " ") + "\n" + lines[len(lines)-1]
 }
+
+// TestLocalBranchBoxDrawsInsideTheResponsiveLeftColumn renders the model on a
+// 100- to 119-column terminal with sidebar content, where the responsive
+// layout gives the left column under 40 columns, and checks that the Local
+// branch box is drawn at that column's width with whole borders, and that no
+// line of the view is wider than the terminal.
+func TestLocalBranchBoxDrawsInsideTheResponsiveLeftColumn(t *testing.T) {
+	run := &ipc.RunInfo{ID: "run-1", Branch: "feature", Status: types.RunCancelled}
+	for width := responsiveLayoutMinWidth; width < 120; width++ {
+		m := NewModel("socket", nil, run)
+		m.width = width
+		m.height = 50
+		m.logs = []string{"log line"}
+		m.branchSync = &branchsync.State{
+			State: branchsync.StatePipelineOwned, Relation: branchsync.RelationUnknown, Safety: "blocked_pipeline_owned_recoverable",
+			Local:    branchsync.LocalState{Branch: "feature", Head: strings.Repeat("a", 40), Clean: true},
+			Pipeline: branchsync.PipelineState{RunID: "run-1", Status: "cancelled", Phase: "pre_push", CurrentHead: strings.Repeat("c", 40)},
+		}
+		if !shouldUseResponsiveLayout(width, hasResponsiveSidebarContent(m)) {
+			t.Fatalf("fixture: width %d does not use the responsive layout", width)
+		}
+		leftWidth, _ := responsiveColumnWidths(width)
+
+		// The view opens with the terminal title's OSC sequence, which
+		// takes no columns on the terminal.
+		rendered := m.View()
+		if end := strings.IndexByte(rendered, '\a'); strings.HasPrefix(rendered, "\x1b]2;") && end >= 0 {
+			rendered = rendered[end+1:]
+		}
+		view := stripANSI(rendered)
+		lines := strings.Split(view, "\n")
+		for _, line := range lines {
+			if got := lipgloss.Width(line); got > width {
+				t.Errorf("width %d: view line is %d columns wide:\n%s", width, got, line)
+			}
+		}
+
+		top := -1
+		for i, line := range lines {
+			if strings.HasPrefix(line, "╭─ Local branch ") {
+				top = i
+				break
+			}
+		}
+		if top < 0 {
+			t.Fatalf("width %d: no Local branch box in the view:\n%s", width, view)
+		}
+		bottom := -1
+		for i := top; i < len(lines); i++ {
+			left := []rune(lines[i])
+			if len(left) < leftWidth {
+				t.Fatalf("width %d: box line %d is shorter than the %d-column left column:\n%s", width, i, leftWidth, view)
+			}
+			left = left[:leftWidth]
+			first, last := string(left[0]), string(left[leftWidth-1])
+			switch {
+			case i == top:
+				if last != "╮" {
+					t.Errorf("width %d: top border does not close at column %d: %q", width, leftWidth, string(left))
+				}
+			case first == "╰":
+				if last != "╯" {
+					t.Errorf("width %d: bottom border does not close at column %d: %q", width, leftWidth, string(left))
+				}
+				bottom = i
+			case first != "│" || last != "│":
+				t.Errorf("width %d: box line is not whole within the %d-column left column: %q", width, leftWidth, string(left))
+			}
+			if bottom >= 0 {
+				break
+			}
+		}
+		if bottom < 0 {
+			t.Fatalf("width %d: the Local branch box has no bottom border:\n%s", width, view)
+		}
+		box := strings.Builder{}
+		for _, line := range lines[top : bottom+1] {
+			box.WriteString(string([]rune(line)[:leftWidth]))
+			box.WriteString("\n")
+		}
+		for _, want := range []string{"Recover", "u recover custody"} {
+			if !strings.Contains(box.String(), want) {
+				t.Errorf("width %d: Local branch box missing %q:\n%s", width, want, box.String())
+			}
+		}
+	}
+}
+
+// TestConfirmationProseWrapsToItsBox renders the custody recovery and local
+// branch sync confirmations at the 65 columns the responsive layout's right
+// column has on a 105-column terminal, and checks that their opening prose
+// fills each line before breaking it: no line ends while the next line's first
+// word would still have fit on it.
+func TestConfirmationProseWrapsToItsBox(t *testing.T) {
+	ordinary := branchsync.State{
+		State: branchsync.StatePipelineOwned, Safety: "blocked_pipeline_owned_recoverable",
+		Local:    branchsync.LocalState{Branch: "feature", Head: strings.Repeat("a", 40), Clean: true},
+		Pipeline: branchsync.PipelineState{RunID: "run-1", Status: "cancelled", CurrentHead: strings.Repeat("c", 40)},
+	}
+	archive := ordinary
+	archive.Recovery = &branchsync.RecoveryEvidence{
+		Source: "bound_archive", RequiredHead: strings.Repeat("a", 40), ArchiveRef: "refs/heads/archive/run-1", KeepLocal: true, Proof: "verified",
+	}
+	fastForward := ordinary
+	fastForward.State = branchsync.StateBehind
+	fastForward.Safety = branchsync.SafetySafeFastForward
+	equivalent := fastForward
+	equivalent.State = branchsync.StateDiverged
+	equivalent.Safety = branchsync.SafetySafeEquivalentAdvance
+	const width = 65
+	for name, rendered := range map[string]string{
+		"ordinary recovery":       renderRecoverConfirmation(ordinary, width),
+		"archive recovery":        renderRecoverConfirmation(archive, width),
+		"fast-forward sync":       renderSyncConfirmation(fastForward, width),
+		"equivalent-advance sync": renderSyncConfirmation(equivalent, width),
+	} {
+		lines := strings.Split(stripANSI(rendered), "\n")
+		var prose []string
+		for _, line := range lines[1 : len(lines)-1] {
+			text := strings.TrimSpace(strings.Trim(line, "│"))
+			if strings.HasPrefix(text, "Local branch:") {
+				break
+			}
+			prose = append(prose, text)
+		}
+		for i := 0; i+1 < len(prose); i++ {
+			if prose[i] == "" || prose[i+1] == "" {
+				continue
+			}
+			next := strings.Fields(prose[i+1])[0]
+			if lipgloss.Width(prose[i])+1+lipgloss.Width(next) <= width-4 {
+				t.Errorf("%s confirmation breaks %q before %q, which fits on it:\n%s", name, prose[i], next, strings.Join(lines, "\n"))
+			}
+		}
+	}
+}
+
+// TestBranchSyncBoxesFitANarrowStackedTerminal renders the Local branch box
+// and both confirmations at 30 columns, the width the stacked layout gives
+// them on a 30-column terminal, and checks that every line fits and each
+// box's borders are whole at that width.
+func TestBranchSyncBoxesFitANarrowStackedTerminal(t *testing.T) {
+	const width = 30
+	stranded := branchsync.State{
+		State: branchsync.StatePipelineOwned, Safety: "blocked_pipeline_owned_recoverable",
+		Local:    branchsync.LocalState{Branch: "feature", Head: strings.Repeat("a", 40), Clean: true},
+		Pipeline: branchsync.PipelineState{RunID: "run-1", Status: "cancelled", CurrentHead: strings.Repeat("c", 40)},
+	}
+	behind := stranded
+	behind.State = branchsync.StateBehind
+	behind.Safety = branchsync.SafetySafeFastForward
+	behind.Pipeline.PushedHead = strings.Repeat("c", 40)
+	behind.Target = branchsync.TargetState{Kind: "upstream", Remote: "origin", Ref: "refs/heads/feature"}
+	for name, rendered := range map[string]string{
+		"local branch":          renderLocalBranchStatus(&stranded, false, width),
+		"recovery confirmation": renderRecoverConfirmation(stranded, width),
+		"sync confirmation":     renderSyncConfirmation(behind, width),
+	} {
+		lines := strings.Split(stripANSI(rendered), "\n")
+		for i, line := range lines {
+			if got := lipgloss.Width(line); got != width {
+				t.Errorf("%s: line %d is %d columns wide, want %d: %q", name, i, got, width, line)
+			}
+			runes := []rune(line)
+			first, last := string(runes[0]), string(runes[len(runes)-1])
+			switch {
+			case i == 0:
+				if first != "╭" || last != "╮" {
+					t.Errorf("%s: top border is not whole: %q", name, line)
+				}
+			case i == len(lines)-1:
+				if first != "╰" || last != "╯" {
+					t.Errorf("%s: bottom border is not whole: %q", name, line)
+				}
+			case first != "│" || last != "│":
+				t.Errorf("%s: line %d is not inside the box: %q", name, i, line)
+			}
+		}
+	}
+}

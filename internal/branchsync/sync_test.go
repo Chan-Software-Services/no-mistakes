@@ -1016,6 +1016,39 @@ func TestRefreshParentCancellationStopsFetchAfterLsRemoteSucceeds(t *testing.T) 
 	}
 }
 
+// TestRefreshRemoteChangedDuringRefreshOffersTheAgentCheckAsRetry starts from
+// a cached inspection that offers sync and has the fetch land a different
+// commit in the private sync ref than ls-remote saw, as when the remote
+// branch moves between the two calls. The refresh must not hand back the
+// cached sync action beside that block: it offers the agent check again, as
+// the ls-remote and fetch failures do.
+func TestRefreshRemoteChangedDuringRefreshOffersTheAgentCheckAsRetry(t *testing.T) {
+	f := newSyncFixture(t)
+	cached := f.service.InspectCached(f.ctx)
+	if cached.NextAction == nil || cached.NextAction.Code != "sync" {
+		t.Fatalf("fixture: cached next action = %#v, want sync", cached.NextAction)
+	}
+
+	f.service.fetchRemote = func(ctx context.Context, dir, remote, branch, localRef string) error {
+		if err := gitpkg.FetchRemoteBranchToPrivateRef(ctx, dir, remote, branch, localRef); err != nil {
+			return err
+		}
+		_, err := gitpkg.Run(ctx, dir, "update-ref", localRef, f.old)
+		return err
+	}
+
+	state := f.service.Refresh(f.ctx)
+	if state.State != StateRemoteRewritten || state.Safety != "blocked_remote_changed_during_refresh" || state.Changed {
+		t.Fatalf("state = %#v, want blocked_remote_changed_during_refresh", state)
+	}
+	if state.NextAction == nil || state.NextAction.Code != "retry" || state.NextAction.Command != AgentCheckCommand {
+		t.Fatalf("next action = %#v, want retry with %q", state.NextAction, AgentCheckCommand)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.old {
+		t.Fatal("HEAD changed on a remote that moved during the refresh")
+	}
+}
+
 func cloneRemoteBranch(t *testing.T, remote string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "writer")
