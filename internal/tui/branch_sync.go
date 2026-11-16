@@ -28,7 +28,7 @@ func renderLocalBranchStatus(state *branchsync.State, refreshing bool, width int
 				}
 				footer = "u recover custody"
 			} else if state.NextAction != nil && state.NextAction.Code == "recover_custody" {
-				message = "Run ended without a recoverable preserved head. Keep the current local head and return custody with `no-mistakes axi sync --recover --keep-local`."
+				message = "Run ended without a recoverable preserved head. Keep the current local head and return custody with `" + branchsync.HumanRecoverKeepLocalCommand + "`."
 			} else {
 				message = "Local branch unchanged; the pipeline fix is not pushed yet. Do not make follow-up commits."
 			}
@@ -139,7 +139,7 @@ func renderRecoverConfirmation(state branchsync.State, width int) string {
 		fmt.Fprintf(&b, "Required HEAD:  %s\n\n", state.Recovery.RequiredHead)
 		b.WriteString("Any changed archive, head, branch, run, repository, or gate evidence makes recovery refuse without selecting the divergent head.")
 	} else {
-		b.WriteString("\nDirty worktrees and divergence that cannot be proven contained refuse without changes; `no-mistakes sync --recover --keep-local` keeps the current head instead.")
+		b.WriteString("\nDirty worktrees and divergence that cannot be proven contained refuse without changes; `" + branchsync.HumanRecoverKeepLocalCommand + "` keeps the current head instead.")
 	}
 	return renderBoxWithFooter("Confirm custody recovery", b.String(), width, "u/enter recover  ·  esc cancel")
 }

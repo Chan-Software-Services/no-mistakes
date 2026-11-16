@@ -171,9 +171,14 @@ func TestMissingPreservedHeadStatusShowsKeepLocalRecoveryCommand(t *testing.T) {
 		},
 	}
 
+	// The TUI is a person's surface, so it names the human command, whose
+	// output is human text, never the agent's axi form from the next action.
 	view := stripANSI(renderLocalBranchStatus(&state, false, 80))
-	if !strings.Contains(view, "no-mistakes axi sync --recover --keep-local") {
-		t.Fatalf("missing-head status did not show its recovery command:\n%s", view)
+	if !strings.Contains(view, "`no-mistakes sync --recover --keep-local`") {
+		t.Errorf("missing-head status did not show the human recovery command:\n%s", view)
+	}
+	if strings.Contains(view, "axi sync") {
+		t.Errorf("missing-head status names an axi command:\n%s", view)
 	}
 }
 

@@ -285,7 +285,7 @@ func runHumanRecover(cmd *cobra.Command, keepLocal, yes bool) error {
 		if !syncInteractive() {
 			retry := "no-mistakes sync --recover --yes"
 			if keepLocal {
-				retry = "no-mistakes sync --recover --keep-local --yes"
+				retry = branchsync.HumanRecoverKeepLocalCommand + " --yes"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "  Non-interactive input cannot confirm this recovery. Re-run with `%s`.\n", retry)
 			result = "refused"
@@ -484,12 +484,12 @@ func humanSyncSummary(state branchsync.State) string {
 	case branchsync.StatePipelineOwned:
 		if state.Safety == "blocked_pipeline_owned_recoverable" {
 			if state.Recovery != nil && state.Recovery.KeepLocal {
-				return "later pipeline work is preserved by a verified archive; recover custody at the exact required head with `no-mistakes sync --recover --keep-local`"
+				return "later pipeline work is preserved by a verified archive; recover custody at the exact required head with `" + branchsync.HumanRecoverKeepLocalCommand + "`"
 			}
 			return "run ended without publishing its pipeline commits; recover custody with `no-mistakes sync --recover`. `no-mistakes rerun` resumes validating the selected preserved head, but refuses a known clean caller HEAD mismatch. If heads differ, inspect `no-mistakes axi status` and follow its exact `branch_sync.next_action.command` for custody or synchronization, then submit intended local commits with a fresh `no-mistakes axi run` once custody permits"
 		}
 		if state.Safety == "blocked_recover_preserved_head_missing" {
-			return "run ended without a recoverable preserved head; recover custody with `no-mistakes sync --recover --keep-local` to keep the current local head"
+			return "run ended without a recoverable preserved head; recover custody with `" + branchsync.HumanRecoverKeepLocalCommand + "` to keep the current local head"
 		}
 		return "pipeline fix is not pushed yet; do not make local follow-up commits"
 	case branchsync.StateCustodyReturned:
@@ -615,7 +615,7 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal, adoptPublished bo
 func verifiedArchiveRecovery(state branchsync.State) bool {
 	return state.Recovery != nil && state.Recovery.Source == "bound_archive" && state.Recovery.Proof == "verified" &&
 		state.Recovery.KeepLocal && state.NextAction != nil && state.NextAction.Code == "recover_custody" &&
-		state.NextAction.Command == "no-mistakes axi sync --recover --keep-local"
+		state.NextAction.Command == branchsync.AgentRecoverKeepLocalCommand
 }
 
 func trackSyncAttempt(command, surface, mode string, state branchsync.State, result string, started time.Time) {
