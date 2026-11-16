@@ -14,15 +14,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // TestTUIYoloFixesAGateParkedBeforeAttach is the operator who attaches to a
 // run already parked at Review and presses yolo as soon as the run is drawn.
-// The TUI's first authoritative read is still in flight at that keypress, so
-// yolo cannot act on it then; it must act once the read lands, since a gate
-// parked on a human sends no later event. It used to stay on, "end yolo" in
-// the action bar, with the gate never resolved.
+// The TUI's first authoritative read is usually still in flight at that
+// keypress, so yolo cannot act on it then; it must act once the read lands,
+// since a gate parked on a human sends no later event. It used to stay on,
+// "end yolo" in the action bar, with the gate never resolved. Whether the read
+// has landed by the keypress is a race here, so this journey can pass without
+// that fix on a run where the read lands first;
+// TestModel_Yolo_ActsWhenTheReconcileInFlightAtTheKeypressLands pins the
+// order.
 func TestTUIYoloFixesAGateParkedBeforeAttach(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the TUI driver uses pty.fork(), which is Unix-only")
@@ -56,19 +61,67 @@ func TestTUIYoloFixesAGateParkedBeforeAttach(t *testing.T) {
 	}
 
 	// Yolo's fix sends the finding to the fixer, and the rereview parks the
-	// step again as a fix review.
-	if fixed := waitForStepStatus(t, h, branch, types.StepReview, types.StepStatusFixReview, 90*time.Second); fixed == nil {
-		t.Fatalf("yolo never fixed the parked review gate; TUI screen:\n%s", lastScreenFrame(screen))
+	// step again as a fix review. Yolo is still on for the window above and may
+	// approve that park too, and with the fast fake agent the run then finishes
+	// in a fraction of a second, too soon for a poll to see the park. The TUI
+	// has quit, so nothing resolves a park from here: the run rests at the fix
+	// review or has finished, and either is yolo's fix done.
+	run := waitForYoloFixOutcome(t, h, branch, screen, 90*time.Second)
+	if review, ok := findStep(run.Steps, types.StepReview); ok {
+		t.Logf("after yolo's fix: run %s, review step %s", run.Status, review.Status)
 	}
-	sawFixer := false
-	for _, inv := range h.AgentInvocations() {
-		if strings.Contains(inv.Prompt, "axi-1") && strings.Contains(inv.Prompt, "Investigate previous review findings") {
-			sawFixer = true
+	if run.Status.Terminal() && run.Status != types.RunCompleted {
+		t.Fatalf("run ended %s after yolo's fix, want completed; TUI screen:\n%s", run.Status, lastScreenFrame(screen))
+	}
+	fixer := -1
+	rereviewed := false
+	for i, inv := range h.AgentInvocations() {
+		switch {
+		case fixer < 0 && strings.Contains(inv.Prompt, "axi-1") && strings.Contains(inv.Prompt, "Investigate previous review findings"):
+			fixer = i
+		case fixer >= 0 && strings.Contains(inv.Prompt, "Review the code changes and return structured findings"):
+			rereviewed = true
 		}
 	}
-	if !sawFixer {
+	if fixer < 0 {
 		t.Fatal("no fix turn was handed the parked finding axi-1")
 	}
+	if !rereviewed {
+		t.Fatal("no review ran after the fix turn")
+	}
+}
+
+// waitForYoloFixOutcome polls until branch's run has finished or its review
+// step is parked as a fix review, and returns that run. A run still parked at
+// the first gate when the timeout ends fails the test, with the last frame of
+// screen, the TUI's drawing: yolo never acted.
+func waitForYoloFixOutcome(t *testing.T, h *Harness, branch, screen string, timeout time.Duration) *ipc.RunInfo {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastRun *ipc.RunInfo
+	var pollErr error
+	for time.Now().Before(deadline) {
+		var runs []ipc.RunInfo
+		runs, pollErr = h.runs()
+		for i := range runs {
+			run := runs[i]
+			if run.Branch != branch {
+				continue
+			}
+			lastRun = &run
+			if run.Status.Terminal() {
+				return &run
+			}
+			if step, ok := findStep(run.Steps, types.StepReview); ok && step.Status == types.StepStatusFixReview {
+				return &run
+			}
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	h.dumpDebugState()
+	t.Fatalf("yolo never fixed the parked review gate on %s in %v (%s); TUI screen:\n%s", branch, timeout, polledRunProgress(lastRun, pollErr), lastScreenFrame(screen))
+	return nil
 }
 
 // tuiReadyDeadline bounds how long pressYoloInTheTUI waits for the TUI to
