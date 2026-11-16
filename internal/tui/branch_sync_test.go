@@ -539,3 +539,47 @@ func TestConfirmationProseWrapsToItsBox(t *testing.T) {
 		}
 	}
 }
+
+// TestBranchSyncBoxesFitANarrowStackedTerminal renders the Local branch box
+// and both confirmations at 30 columns, the width the stacked layout gives
+// them on a 30-column terminal, and checks that every line fits and each
+// box's borders are whole at that width.
+func TestBranchSyncBoxesFitANarrowStackedTerminal(t *testing.T) {
+	const width = 30
+	stranded := branchsync.State{
+		State: branchsync.StatePipelineOwned, Safety: "blocked_pipeline_owned_recoverable",
+		Local:    branchsync.LocalState{Branch: "feature", Head: strings.Repeat("a", 40), Clean: true},
+		Pipeline: branchsync.PipelineState{RunID: "run-1", Status: "cancelled", CurrentHead: strings.Repeat("c", 40)},
+	}
+	behind := stranded
+	behind.State = branchsync.StateBehind
+	behind.Safety = branchsync.SafetySafeFastForward
+	behind.Pipeline.PushedHead = strings.Repeat("c", 40)
+	behind.Target = branchsync.TargetState{Kind: "upstream", Remote: "origin", Ref: "refs/heads/feature"}
+	for name, rendered := range map[string]string{
+		"local branch":          renderLocalBranchStatus(&stranded, false, width),
+		"recovery confirmation": renderRecoverConfirmation(stranded, width),
+		"sync confirmation":     renderSyncConfirmation(behind, width),
+	} {
+		lines := strings.Split(stripANSI(rendered), "\n")
+		for i, line := range lines {
+			if got := lipgloss.Width(line); got != width {
+				t.Errorf("%s: line %d is %d columns wide, want %d: %q", name, i, got, width, line)
+			}
+			runes := []rune(line)
+			first, last := string(runes[0]), string(runes[len(runes)-1])
+			switch {
+			case i == 0:
+				if first != "╭" || last != "╮" {
+					t.Errorf("%s: top border is not whole: %q", name, line)
+				}
+			case i == len(lines)-1:
+				if first != "╰" || last != "╯" {
+					t.Errorf("%s: bottom border is not whole: %q", name, line)
+				}
+			case first != "│" || last != "│":
+				t.Errorf("%s: line %d is not inside the box: %q", name, i, line)
+			}
+		}
+	}
+}
