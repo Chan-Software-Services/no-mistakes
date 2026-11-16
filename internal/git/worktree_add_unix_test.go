@@ -3,10 +3,13 @@
 package git
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A git process walking the gate's worktrees while a run starts must never see
@@ -78,4 +81,60 @@ cat
 		t.Fatalf("probe.txt in the worktree = %q, %v; want it checked out through the filter", data, err)
 	}
 	assertUsableDetachedWorktree(t, f, wt)
+}
+
+// A creation whose context is cancelled in the middle of its checkout, with
+// its entry already renamed into worktrees/ and its working directory made,
+// undoes all of it without the cancelled context. The smudge filter tells the
+// test the checkout has started and then blocks until the cancellation kills
+// it.
+func TestWorktreeAddUndoesACreationCancelledDuringItsCheckout(t *testing.T) {
+	f := routeThroughFilter(t, "block")
+	started := filepath.Join(t.TempDir(), "started")
+	script := filepath.Join(t.TempDir(), "block.sh")
+	writeFile(t, script, `#!/bin/sh
+: > '`+started+`'
+i=0
+while [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done
+exit 1
+`)
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, f.repo, "git", "--git-dir="+f.repo, "config", "filter.block.smudge", script)
+
+	ctx, cancel := context.WithCancel(f.ctx)
+	defer cancel()
+	go func() {
+		for {
+			if _, err := os.Lstat(started); err == nil {
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+
+	wt := filepath.Join(t.TempDir(), "run-1")
+	err := WorktreeAdd(ctx, f.repo, wt, f.sha)
+	if err == nil {
+		t.Fatal("WorktreeAdd cancelled during its checkout succeeded")
+	}
+	if _, statErr := os.Lstat(started); statErr != nil {
+		t.Fatalf("the add failed before its checkout started (%v): %v", statErr, err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WorktreeAdd error = %v, want it to wrap context.Canceled", err)
+	}
+	if _, err := os.Lstat(wt); !os.IsNotExist(err) {
+		t.Fatalf("the worktree path exists after a cancelled add (lstat error %v)", err)
+	}
+	f.assertNothingLeftBehind(t, wt)
+	if names := f.entries(t, removedWorktreeTrash); len(names) != 0 {
+		t.Errorf("%s/ holds %v after a cancelled add, want nothing", removedWorktreeTrash, names)
+	}
 }
