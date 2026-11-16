@@ -16,8 +16,9 @@ import (
 )
 
 // longReviewFindingDescription is a review finding as long as a recorded one
-// a worker could not read whole (669 characters), past the gate's 600-character cut, with the commas and quotes
-// a real description carries so the TOON row has to quote it.
+// a worker could not read whole (669 characters), past the gate's
+// 600-character cut, with the commas and quotes a real description carries so
+// the TOON row has to quote it.
 func longReviewFindingDescription(t *testing.T) string {
 	t.Helper()
 	const sentence = "The loader reads \"flags.enabled\" before the config file is parsed, so a missing file leaves it nil; "

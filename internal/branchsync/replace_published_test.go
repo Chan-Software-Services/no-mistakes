@@ -17,9 +17,9 @@ import (
 const replaceBranch = "feature/replace"
 
 // replaceFixture is the shape of a gate commit replaced on the branch: a
-// completed run published a head carrying a gate fix commit to the configured target, the gate branch still
-// names that published head, and the operator's local branch has been
-// rewritten so it lacks the fix commit.
+// completed run published a head carrying a gate fix commit to the configured
+// target, the gate branch still names that published head, and the
+// operator's local branch has been rewritten so it lacks the fix commit.
 type replaceFixture struct {
 	t         *testing.T
 	ctx       context.Context

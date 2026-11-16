@@ -153,6 +153,7 @@ The Push step and the CI step's repair publication share one publication path, w
 A missing, malformed, or unreachable submitted head fails closed.
 An operator who rewrites their branch and force-pushes it to the gate starts a new run whose submitted head is that rewrite, so the rewrite still publishes, through the same guarded `--force-with-lease` push as before.
 The run that follows `no-mistakes sync --replace-published` is the same case: its submitted head is the operator's history and its base is the replaced published head, which the gate pins at the previous run's recovery ref.
+That run start fails closed: when the branch's runs cannot be read, or the replacement's evidence is present but whether the new head contains the replaced head cannot be checked, the run does not start, rather than take a base under which the Rebase step would merge the replaced head back in.
 
 ### Daemon
 

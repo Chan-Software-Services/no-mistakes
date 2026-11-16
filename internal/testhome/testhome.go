@@ -51,9 +51,10 @@ type Dirs struct {
 
 // Setup pins Go's caches, creates <prefix>-test-* (NM_HOME) and
 // <prefix>-home-* (HOME) in the base directory, points NM_HOME and HOME at
-// them, and turns Go's telemetry off inside the new HOME. The base is BaseEnv when it is set, otherwise defaultBase, and the
-// system temporary directory when that is empty too. The caller sets its other
-// variables and stops its own daemon, then ends with os.Exit(dirs.Close(code)).
+// them, and turns Go's telemetry off inside the new HOME. The base is BaseEnv
+// when it is set, otherwise defaultBase, and the system temporary directory
+// when that is empty too. The caller sets its other variables and stops its
+// own daemon, then ends with os.Exit(dirs.Close(code)).
 func Setup(prefix, defaultBase string) (*Dirs, error) {
 	base := os.Getenv(BaseEnv)
 	if base == "" {
