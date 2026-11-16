@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -289,7 +290,7 @@ Rules:
 		reassessHistory,
 		agent.MemoryFilesRule,
 	)
-	findings, rebuiltFrom, err := runTestAnalyzer(sctx, evidencePrompt, stallWindow)
+	report, err := runTestAnalyzer(sctx, evidencePrompt, stallWindow)
 	if err != nil {
 		if isTestAgentCut(err) {
 			outcome := testAgentTimeoutOutcome(sctx, err, startHead, baselineFindings, baselineSummary, baselineExitCode)
@@ -298,6 +299,7 @@ Rules:
 		}
 		return nil, err
 	}
+	findings := report.findings
 	if len(tested) > 0 {
 		findings.Tested = append(append([]string{}, tested...), findings.Tested...)
 	}
@@ -307,9 +309,9 @@ Rules:
 		findings.Summary = strings.TrimSpace(strings.Join([]string{baselineSummary, findings.Summary}, "\n"))
 	}
 
-	findings.Items = append(findings.Items, verdictFindings(findings, rebuiltFrom != nil)...)
-	if rebuiltFrom != nil {
-		findings.Items = append(findings.Items, rebuiltTestReportNote(rebuiltFrom))
+	findings.Items = append(findings.Items, verdictFindings(findings, report.rebuilt())...)
+	if report.rebuilt() {
+		findings.Items = append(findings.Items, rebuiltTestReportNote(report.rebuiltFrom))
 	}
 
 	needsApproval := hasBlockingFindings(findings.Items)
@@ -363,9 +365,20 @@ func testServiceGuidance(runID string) string {
 // than correcting structured output.
 const testAnalyzerMaxAttempts = 3
 
-// runTestAnalyzer returns, beside the accepted findings, the evidence turn's
-// own validation error when the findings came from a correction turn (nil
-// when the evidence turn's report was accepted as it was).
+// testAnalyzerReport is the report runTestAnalyzer accepted.
+type testAnalyzerReport struct {
+	findings Findings
+	// rebuiltFrom is the evidence turn's own validation error when findings
+	// came from a correction turn, and nil when the evidence turn's report was
+	// accepted as it was. It is not a failure: the report was accepted.
+	rebuiltFrom error
+}
+
+// rebuilt reports whether a correction turn rebuilt the report.
+func (r testAnalyzerReport) rebuilt() bool { return r.rebuiltFrom != nil }
+
+// runTestAnalyzer returns the accepted report (testAnalyzerReport), or an
+// error when no report was accepted.
 //
 // The submissions the agent's CLI refused during the evidence turn
 // (agent.Result.RefusedOutputs) ride every correction prompt: they are the
@@ -376,7 +389,7 @@ const testAnalyzerMaxAttempts = 3
 // same reason an evidence turn that ended with every submission refused
 // (agent.IsStructuredOutputRetriesExhausted) goes to the correction turn when
 // it has a refused submission, and fails as before when it has none.
-func runTestAnalyzer(sctx *pipeline.StepContext, prompt string, stallWindow time.Duration) (Findings, error, error) {
+func runTestAnalyzer(sctx *pipeline.StepContext, prompt string, stallWindow time.Duration) (testAnalyzerReport, error) {
 	current := prompt
 	var lastErr, evidenceErr error
 	var refused []agent.RefusedOutput
@@ -395,6 +408,11 @@ func runTestAnalyzer(sctx *pipeline.StepContext, prompt string, stallWindow time
 			CWD:        sctx.WorkDir,
 			JSONSchema: testFindingsSchema,
 			OnChunk:    sctx.LogChunk,
+			// A replay of the evidence turn drives every scenario again inside
+			// the same budget; its missing report goes to the correction turn
+			// instead. A correction turn runs no tools, so the flag only ever
+			// refuses a replay of one that broke that rule.
+			NoReplayAfterTools: true,
 		})
 		runErr := testAgentError(evidenceCtx, timeout, "agent run tests", err)
 		if attempt == 1 && result != nil {
@@ -404,7 +422,7 @@ func runTestAnalyzer(sctx *pipeline.StepContext, prompt string, stallWindow time
 			(attempt == 1 && len(refused) > 0 && agent.IsStructuredOutputRetriesExhausted(runErr))
 		if runErr != nil && (context.Cause(evidenceCtx) != nil || pipeline.IsAgentStall(runErr) || !correctable) {
 			cancel()
-			return Findings{}, nil, runErr
+			return testAnalyzerReport{}, runErr
 		}
 		cancel()
 
@@ -418,7 +436,7 @@ func runTestAnalyzer(sctx *pipeline.StepContext, prompt string, stallWindow time
 			var findings Findings
 			findings, valErr = parseTestAnalyzerOutput(result)
 			if valErr == nil {
-				return findings, evidenceErr, nil
+				return testAnalyzerReport{findings: findings, rebuiltFrom: evidenceErr}, nil
 			}
 		}
 		lastErr = valErr
@@ -434,7 +452,7 @@ func runTestAnalyzer(sctx *pipeline.StepContext, prompt string, stallWindow time
 		}
 		current = testAnalyzerCorrectionPrompt(valErr, rejected, refused)
 	}
-	return Findings{}, nil, fmt.Errorf("validate test analyzer findings after %d attempts: %w", testAnalyzerMaxAttempts, lastErr)
+	return testAnalyzerReport{}, fmt.Errorf("validate test analyzer findings after %d attempts: %w", testAnalyzerMaxAttempts, lastErr)
 }
 
 // rebuiltTestReportNoteReasonLimit bounds the validation error the
@@ -515,13 +533,23 @@ Validation errors:
 	if len(refused) > 0 {
 		b.WriteString("\n\nRefused submissions:")
 		for i, submission := range refused {
-			reason := strings.ReplaceAll(sanitizePromptText(submission.Reason), `"`, "'")
-			payload := strings.ReplaceAll(sanitizePromptMultilineText(submission.Payload), "</refused-submission", "<\\/refused-submission")
+			reason := escapeRefusedSubmissionClose(strings.ReplaceAll(sanitizePromptText(submission.Reason), `"`, "'"))
+			payload := escapeRefusedSubmissionClose(sanitizePromptMultilineText(submission.Payload))
 			fmt.Fprintf(&b, "\n<refused-submission n=\"%d\" reason=\"%s\">\n%s\n</refused-submission>", i+1, reason, payload)
 		}
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+// refusedSubmissionCloseRE matches the data block's closing tag in any letter
+// case, so a refused submission's own text cannot end its block early.
+var refusedSubmissionCloseRE = regexp.MustCompile(`(?i)</(refused-submission)`)
+
+// escapeRefusedSubmissionClose escapes every closing tag of the refused
+// submission block in s, keeping its letter case.
+func escapeRefusedSubmissionClose(s string) string {
+	return refusedSubmissionCloseRE.ReplaceAllString(s, `<\/$1`)
 }
 
 func trustedTestInstructionsSection(sctx *pipeline.StepContext) string {

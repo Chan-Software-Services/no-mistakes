@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// The streams below are modelled on run 01M6PVYEV5SAMQKVK1P6Z3V7DE (T223):
+// The streams below are modelled on run 01M6PVYEV5SAMQKVK1P6Z3V7DE:
 // the CLI accepts a StructuredOutput call, then background tasks wake the
 // session for more turns, each ending without a new submission.
 
@@ -289,16 +289,22 @@ func TestClaudeAgent_AcceptedOutputSurvivesWhatFollows(t *testing.T) {
 	}
 }
 
+// claudeToolTurnNoOutput is a turn that ran a tool and ended with a success
+// result carrying no structured output.
+var claudeToolTurnNoOutput = []string{
+	claudeToolUseLine("toolu_watch", "Bash", `{"command":"npx playwright test"}`),
+	claudeToolResultLine("toolu_watch", false, `"174 passed"`),
+	claudeTextLine("the verdict is go"),
+	claudeResultNoOut,
+}
+
 func TestClaudeAgent_NoOutputAfterAToolCallIsNotReplayed(t *testing.T) {
 	defer withFastBackoff(t)()
-	a := setupClaudeStreamHelper(t, claudeStreamRun{lines: []string{
-		claudeToolUseLine("toolu_watch", "Bash", `{"command":"npx playwright test"}`),
-		claudeToolResultLine("toolu_watch", false, `"174 passed"`),
-		claudeTextLine("the verdict is go"),
-		claudeResultNoOut,
-	}})
+	a := setupClaudeStreamHelper(t, claudeStreamRun{lines: claudeToolTurnNoOutput})
 	var log claudeRunLog
-	_, err := a.Run(context.Background(), log.opts(claudeTestSchema, t.TempDir()))
+	opts := log.opts(claudeTestSchema, t.TempDir())
+	opts.NoReplayAfterTools = true
+	_, err := a.Run(context.Background(), opts)
 	if err == nil || err.Error() != "claude returned no structured output" {
 		t.Fatalf("err = %v, want the no-structured-output rejection", err)
 	}
@@ -317,6 +323,24 @@ func TestClaudeAgent_NoOutputAfterAToolCallIsNotReplayed(t *testing.T) {
 		if !strings.Contains(streamed, want) {
 			t.Fatalf("streamed:\n%s\nwant %q", streamed, want)
 		}
+	}
+}
+
+// Only a caller that sets NoReplayAfterTools (the Test step's analyzer turns)
+// loses the replay; every other step keeps it for a turn that ran tools.
+func TestClaudeAgent_NoOutputAfterAToolCallIsReplayedWithoutNoReplayAfterTools(t *testing.T) {
+	defer withFastBackoff(t)()
+	a := setupClaudeStreamHelper(t, claudeStreamRun{lines: claudeToolTurnNoOutput})
+	var log claudeRunLog
+	_, err := a.Run(context.Background(), log.opts(claudeTestSchema, t.TempDir()))
+	if !errors.Is(err, errNoStructuredOutput) {
+		t.Fatalf("err = %v, want the no-structured-output rejection", err)
+	}
+	if log.attempts != claudeMaxRetries+1 {
+		t.Fatalf("attempts = %d, want %d: without NoReplayAfterTools a turn that ran tools keeps its retry", log.attempts, claudeMaxRetries+1)
+	}
+	if strings.Contains(log.streamed(), "not replaying the turn") {
+		t.Fatalf("streamed:\n%s\nwant no not-replaying line without NoReplayAfterTools", log.streamed())
 	}
 }
 

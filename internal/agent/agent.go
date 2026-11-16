@@ -71,6 +71,13 @@ type RunOpts struct {
 	// can be normalized without external git archaeology. Instrumentation only;
 	// adapters ignore it.
 	Workload *InvocationWorkload
+	// NoReplayAfterTools asks the Claude adapter never to replay a turn that
+	// called a tool other than StructuredOutput and ended with no structured
+	// output: the replay would run those tools again inside the same budget.
+	// The Test step's analyzer turns set it, since a replay of the evidence
+	// turn is a second full live validation; every other caller keeps the
+	// replay. Adapters other than Claude ignore it.
+	NoReplayAfterTools bool
 	// OnAttempt receives each concrete adapter attempt, including retries and
 	// fallback-provider attempts, after it completes. It is instrumentation
 	// only and must not change invocation behavior.

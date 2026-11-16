@@ -10,7 +10,7 @@ import (
 )
 
 // These tests model the last Test evidence turn of run
-// 01M6MYHR17WEVPM11RFY2J3CTC (T223): after two refused reports the agent sent
+// 01M6MYHR17WEVPM11RFY2J3CTC: after two refused reports the agent sent
 // a stub of one-letter placeholders, which the CLI and the gate's validator
 // both accepted, so the run recorded go with 1 of 1 scenarios live.
 
@@ -280,5 +280,37 @@ func TestTestFindingsSchema_DescribesWhatEachFieldWants(t *testing.T) {
 				t.Fatalf("%s keywords = %v, want only %v", field, parsed.Properties[field], keys)
 			}
 		}
+	}
+}
+
+// A report whose scenarios array or an artifact's label is missing used to
+// return that one refusal and drop the placeholder issues gathered before it,
+// so the correction turn spent an attempt finding the stub summary.
+func TestUnmarshalRequiredTestFindings_AnEarlyRefusalStillNamesThePlaceholders(t *testing.T) {
+	t.Parallel()
+	const summaryIssue = `testing summary "x" is a placeholder - describe what was exercised and the overall result in a sentence`
+	for _, tc := range []struct {
+		name      string
+		overrides map[string]any
+		last      string
+	}{
+		{"missing scenarios", map[string]any{"scenarios": nil}, "missing scenarios array"},
+		{"empty scenarios", map[string]any{"scenarios": []any{}}, "empty scenarios array - report at least one named scenario; if nothing could be driven, return it as untested with a reason"},
+		{"artifact without a label", map[string]any{"artifacts": []any{map[string]any{"kind": "log", "content": "the receipt log"}}}, "artifact 0 missing label"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			overrides := map[string]any{"testing_summary": "x"}
+			for k, v := range tc.overrides {
+				overrides[k] = v
+			}
+			err := validateTestReport(testReport(t, overrides, nil))
+			if err == nil {
+				t.Fatal("the report was accepted, want it refused")
+			}
+			if want := summaryIssue + "\n" + tc.last; err.Error() != want {
+				t.Fatalf("refusal =\n%s\nwant\n%s", err, want)
+			}
+		})
 	}
 }

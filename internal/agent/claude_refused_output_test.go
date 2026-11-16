@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-// The streams below are modelled on run 01M6KC8W8JRWQJ0RHZ5S25M04W (T213):
+// The streams below are modelled on run 01M6KC8W8JRWQJ0RHZ5S25M04W:
 // the CLI refuses the agent's whole report for a missing artifacts array,
 // three times, and then accepts a probe with no scenarios.
 

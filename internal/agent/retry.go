@@ -117,9 +117,9 @@ func cloneSessionRef(session *SessionRef) *SessionRef {
 }
 
 // claudeRetryClassifier retries both transient API errors and the
-// no-structured-output case, the latter only for a turn that called no tool
-// but StructuredOutput: a turn that ran tools is never replayed, since the
-// replay would run them again (the rule the OpenCode adapter keeps too).
+// no-structured-output case, the latter except for a turn that ran tools
+// under RunOpts.NoReplayAfterTools (claudeTurnRanToolsError), since the replay
+// would run them again (the rule the OpenCode adapter keeps for every turn).
 func claudeRetryClassifier(err error) (string, bool) {
 	if errors.Is(err, errNoStructuredOutput) {
 		var ranTools *claudeTurnRanToolsError

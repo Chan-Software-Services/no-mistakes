@@ -99,8 +99,12 @@ func unmarshalRequiredTestFindings(raw []byte, findings *Findings) error {
 		return fmt.Errorf("empty testing summary")
 	}
 	// The placeholder floor (see minReportTextLetters) is gathered with the
-	// scenario issues below, so one refusal names every placeholder field.
+	// scenario issues below, so one refusal names every placeholder field,
+	// and a refusal that stops before the scenarios (refuse) still names them.
 	var issues []string
+	refuse := func(issue string) error {
+		return fmt.Errorf("%s", strings.Join(append(issues, issue), "\n"))
+	}
 	if !slices.ContainsFunc(*payload.Tested, func(tested string) bool { return reportTextLetters(tested) >= minTestedEntryLetters }) {
 		issues = append(issues, "tested array holds only placeholders - record the commands, tests or checks that were run")
 	}
@@ -113,7 +117,7 @@ func unmarshalRequiredTestFindings(raw []byte, findings *Findings) error {
 	if payload.Artifacts != nil {
 		for i, artifact := range *payload.Artifacts {
 			if artifact.Label == nil {
-				return fmt.Errorf("artifact %d missing label", i)
+				return refuse(fmt.Sprintf("artifact %d missing label", i))
 			}
 		}
 	}
@@ -123,10 +127,10 @@ func unmarshalRequiredTestFindings(raw []byte, findings *Findings) error {
 	// accepting the omission would silently restore the pre-contract behaviour
 	// where "unit tests passed" reads as "the intent works".
 	if payload.Scenarios == nil {
-		return fmt.Errorf("missing scenarios array")
+		return refuse("missing scenarios array")
 	}
 	if len(*payload.Scenarios) == 0 {
-		return fmt.Errorf("empty scenarios array - report at least one named scenario; if nothing could be driven, return it as untested with a reason")
+		return refuse("empty scenarios array - report at least one named scenario; if nothing could be driven, return it as untested with a reason")
 	}
 	for i, scenario := range *payload.Scenarios {
 		issues = append(issues, scenarioContractIssues(i, scenario)...)

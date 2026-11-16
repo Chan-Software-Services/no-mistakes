@@ -26,8 +26,9 @@ const claudeMaxRetries = 3
 var errNoStructuredOutput = errors.New("claude returned no structured output")
 
 // claudeTurnRanToolsError marks a no-structured-output rejection whose turn
-// ran a tool other than StructuredOutput, so claudeRetryClassifier never
-// replays it. Its message is the rejection's own.
+// ran a tool other than StructuredOutput, when the caller set
+// RunOpts.NoReplayAfterTools, so claudeRetryClassifier never replays it. Its
+// message is the rejection's own.
 type claudeTurnRanToolsError struct{ err error }
 
 func (e *claudeTurnRanToolsError) Error() string { return e.err.Error() }
@@ -209,11 +210,13 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 			result.Subtype, len(result.text), usage.InputTokens, usage.OutputTokens))
 		opts.OnChunk(fmt.Sprintf("raw result event: %s", string(result.rawEvent)))
 	}
-	if errors.Is(err, errNoStructuredOutput) && stream.ranTools {
+	if errors.Is(err, errNoStructuredOutput) && stream.ranTools && opts.NoReplayAfterTools {
 		// Replaying a turn that ran tools runs them again in a fresh session:
 		// for a Test turn that is a second full live validation, with its own
-		// side effects, inside the same budget. Only a pure prompt-to-JSON
-		// turn keeps its cheap retry (claudeRetryClassifier).
+		// side effects, inside the same budget. Only the caller knows whether
+		// that matters, so it is the caller's choice (NoReplayAfterTools); a
+		// pure prompt-to-JSON turn always keeps its cheap retry
+		// (claudeRetryClassifier).
 		if opts.OnChunk != nil {
 			opts.OnChunk("claude returned no structured output after running tools; not replaying the turn")
 		}

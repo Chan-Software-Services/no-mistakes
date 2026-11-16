@@ -15,7 +15,7 @@ import (
 )
 
 // TestClaudeAgent_LingeringSessionIsEndedAfterItsAcceptance models the
-// stall cut of run 01M6MYHR17WEVPM11RFY2J3CTC (T223): the CLI accepted the
+// stall cut of run 01M6MYHR17WEVPM11RFY2J3CTC: the CLI accepted the
 // report and the session then stayed alive on a background task with nothing
 // to say. With a shortened grace the adapter ends the whole process group,
 // the background task included, and keeps the accepted report.

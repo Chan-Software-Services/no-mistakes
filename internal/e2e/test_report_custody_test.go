@@ -28,7 +28,7 @@ func claudeStreamLine(t *testing.T, event map[string]any) string {
 }
 
 // acceptedThenNotifiedScenario scripts the Test evidence turn of run
-// 01M6PVYEV5SAMQKVK1P6Z3V7DE (T223): the agent starts a background watch,
+// 01M6PVYEV5SAMQKVK1P6Z3V7DE: the agent starts a background watch,
 // submits its whole report through the StructuredOutput tool, which the CLI
 // accepts, and then the watch's notifications wake the session for more
 // turns, each ending without a new submission. The stream's last result
@@ -112,7 +112,7 @@ func acceptedThenNotifiedScenario(t *testing.T) string {
 }
 
 // TestAcceptedTestReportSurvivesLaterTurnsJourney reproduces run
-// 01M6PVYEV5SAMQKVK1P6Z3V7DE (T223) through the stock `no-mistakes axi`
+// 01M6PVYEV5SAMQKVK1P6Z3V7DE through the stock `no-mistakes axi`
 // surface. The Test agent's report was accepted by the CLI, but the session's
 // last result event carried no structured output, so the adapter called the
 // turn "claude returned no structured output" and replayed the whole live
@@ -172,7 +172,7 @@ func TestAcceptedTestReportSurvivesLaterTurnsJourney(t *testing.T) {
 const refusedReportScenarioName = "an organizer adds an option and sees every file answer offered"
 
 // refusedThenProbedScenario scripts the Test evidence turn of run
-// 01M6KC8W8JRWQJ0RHZ5S25M04W (T213): the agent submits its whole report
+// 01M6KC8W8JRWQJ0RHZ5S25M04W: the agent submits its whole report
 // three times and the CLI refuses each for the missing artifacts array, then
 // it sends a probe with no scenarios, which the CLI accepts and which becomes
 // the turn's output. The gate's validator refuses the probe's empty scenarios
@@ -304,7 +304,7 @@ func refusedThenProbedScenario(t *testing.T) string {
 const testCorrectionPromptMarker = "Your previous structured findings were REJECTED"
 
 // TestRefusedTestReportKeepsItsEvidenceJourney reproduces run
-// 01M6KC8W8JRWQJ0RHZ5S25M04W (T213) through the stock `no-mistakes axi`
+// 01M6KC8W8JRWQJ0RHZ5S25M04W through the stock `no-mistakes axi`
 // surface. The CLI refused the Test agent's whole report three times for a
 // missing artifacts array and then accepted a probe with no scenarios; the
 // gate's correction turn saw only the probe, and the step parked inconclusive
@@ -376,7 +376,7 @@ func TestRefusedTestReportKeepsItsEvidenceJourney(t *testing.T) {
 const placeholderReportScenarioName = "an importer types a word of a long question and finds its column"
 
 // refusedThenStubbedScenario scripts the last Test evidence turn of run
-// 01M6MYHR17WEVPM11RFY2J3CTC (T223): the agent submits its real report twice,
+// 01M6MYHR17WEVPM11RFY2J3CTC: the agent submits its real report twice,
 // and each time the tool call has swallowed the scenarios array into the
 // summary string, so the CLI refuses it for the missing scenarios. The agent
 // then sends the stub it recorded (scenario "x", evidence "e", tested "t",
@@ -492,7 +492,7 @@ func refusedThenStubbedScenario(t *testing.T) string {
 }
 
 // TestPlaceholderTestReportIsRefusedJourney reproduces the last Test evidence
-// turn of run 01M6MYHR17WEVPM11RFY2J3CTC (T223) through the stock
+// turn of run 01M6MYHR17WEVPM11RFY2J3CTC through the stock
 // `no-mistakes axi` surface. The CLI refused the agent's real report twice
 // and then accepted a stub of one-letter placeholders, which the gate's
 // validator accepted too, so the PR body and the attestation said 1 of 1
