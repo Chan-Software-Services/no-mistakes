@@ -239,6 +239,7 @@ Each invocation returns:
 When structured output comes from final text, no-mistakes validates JSON fences and concluding bare JSON objects extracted from prose against the requested schema.
 It accepts inline or unclosed JSON fence forms.
 When more than one candidate validates, the one that ends last in the output wins, for every adapter, so an agent that prints its answer twice or revises it is read as its final word; a closed fence still outranks an unclosed one.
+Position is the only signal, so a schema-valid example fence printed after the answer is read as the answer; this is the accepted reading, since a revised answer printed after a draft has the same shape and is far more common.
 A bare object followed by substantive prose is not treated as a verdict, even when it is the last valid one, while trailing provider tool-protocol residue after a complete object - markup whose tags wrap no words, or punctuation alone, never prose or markup around real words - is.
 When a model splits one answer across adjacent bare objects - separated by nothing but whitespace or a single comma - the merged object is accepted only when their keys are disjoint and the union validates, so two competing verdicts are never combined; a concluding split with disjoint keys whose union still does not validate fails with its own dedicated error rather than a generic schema error, while a run that repeats a top-level key is competing values and stays terminal.
 

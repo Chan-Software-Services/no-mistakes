@@ -466,7 +466,7 @@ func TestStopDetachedDaemonRejectsUnrelatedLiveProcessPIDFallback(t *testing.T) 
 }
 
 // TestValidateDaemonPIDFallback_RefusesToKillOwnProcess covers the crash
-// behind an intermittent Windows CI hang: helpers_test.go's startTestDaemon
+// behind an intermittent test hang on Windows: helpers_test.go's startTestDaemon
 // runs the daemon in-process via a goroutine (daemon.RunWithResources), so
 // the pid file it writes records the test binary's own pid. If the daemon
 // doesn't confirm a graceful stop before waitForDaemonStop's deadline, the
@@ -881,7 +881,7 @@ func TestReadPIDNoFile(t *testing.T) {
 }
 
 // TestWaitForDaemonStopNeverKillsOwnPIDWhenHealthCheckOnlyErrors reproduces
-// the full path behind the Windows CI hang end to end: a daemon that never
+// the full path behind the Windows test hang end to end: a daemon that never
 // confirms a graceful stop (health check errors on every poll, as observed
 // on Windows where a closed loopback listener doesn't fail pending/racing
 // connections as immediately as a Unix domain socket unlink does) combined

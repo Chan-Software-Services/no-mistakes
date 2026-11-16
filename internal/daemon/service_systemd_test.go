@@ -265,8 +265,8 @@ func TestRenderSystemdUnitForwardsProxyEnv(t *testing.T) {
 // both the upper- and lower-case spellings - must reach the unit as its own
 // Environment= line. The proxy environment is injected directly rather than
 // read from the process environment so the assertion is independent of the
-// host's env-var case sensitivity (it ran on Windows CI, where setting both
-// spellings to distinct values is impossible); serviceProxyEnv's own
+// host's env-var case sensitivity (on Windows, setting both spellings to
+// distinct values is impossible); serviceProxyEnv's own
 // platform-specific behaviour is covered by the TestServiceProxyEnv* tests.
 func TestRenderSystemdUnitForwardsEveryProxyEnvKey(t *testing.T) {
 	var proxyEnv [][2]string

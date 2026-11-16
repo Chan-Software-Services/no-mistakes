@@ -56,7 +56,7 @@ func TestReconcileStaleBranchArchivesTheGatesCleanMergeOfABaseTheLiveHeadMerged(
 	}
 	gateDir := mirrorAt(t, work, gateMerge)
 
-	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead, "")
+	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead)
 	if err != nil || !result.Reconciled {
 		t.Fatalf("the gate's clean merge was held at risk: result=%+v err=%v", result, err)
 	}
@@ -90,7 +90,7 @@ func TestReconcileStaleBranchKeepsAMergeWithItsOwnContentAtRisk(t *testing.T) {
 	liveHead := reconcileGit(t, work, "rev-parse", "HEAD")
 	gateDir := mirrorAt(t, work, evilMerge)
 
-	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead, "")
+	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead)
 	if err == nil || result.Reconciled || !strings.Contains(err.Error(), evilMerge) {
 		t.Fatalf("a merge with its own content was not held at risk by name: result=%+v err=%v", result, err)
 	}
@@ -130,7 +130,7 @@ func TestReconcileStaleBranchKeepsAConflictResolutionMergeAtRisk(t *testing.T) {
 	liveHead := resolve("merge main by hand")
 	gateDir := mirrorAt(t, work, gateMerge)
 
-	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead, "")
+	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead)
 	if err == nil || result.Reconciled || !strings.Contains(err.Error(), gateMerge) {
 		t.Fatalf("a conflict-resolution merge was not held at risk by name: result=%+v err=%v", result, err)
 	}
@@ -158,7 +158,7 @@ func TestReconcileStaleBranchKeepsAMergeWithAParentTheLiveHeadLacksAtRisk(t *tes
 	liveHead := reconcileGit(t, work, "rev-parse", "HEAD")
 	gateDir := mirrorAt(t, work, gateMerge)
 
-	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead, "")
+	result, err := ReconcileStaleBranch(context.Background(), gateDir, work, "feature", liveHead)
 	if err == nil || result.Reconciled {
 		t.Fatalf("a merge with a parent the live head lacks was reconciled: result=%+v", result)
 	}

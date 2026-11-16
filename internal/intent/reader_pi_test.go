@@ -370,7 +370,7 @@ func TestPiReader_PreservesRepeatedLiveMessages(t *testing.T) {
 
 func TestPiReader_LoadsOversizedAgentEndRecord(t *testing.T) {
 	// Keep this well above bufio.Scanner's default 64 KiB token limit without
-	// making Windows CI spend excessive time writing and parsing the fixture.
+	// making a Windows host spend excessive time writing and parsing the fixture.
 	const oversizedPayloadSize = 1024 * 1024
 
 	repoCWD := t.TempDir()

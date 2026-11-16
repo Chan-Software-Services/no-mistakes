@@ -274,7 +274,7 @@ func NewTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA stri
 	// Most step tests do not exercise remote transport. Give repositories that
 	// lack an explicitly configured origin a local one so incidental upstream
 	// refreshes stay hermetic. Without this, CI monitor tests fetch the
-	// placeholder github.com/test/repo URL; under process-saturated macOS CI the
+	// placeholder github.com/test/repo URL; on a process-saturated macOS host the
 	// fetch can consume their entire idle timeout before the fake provider is
 	// queried.
 	if gitDir, err := os.Stat(filepath.Join(workDir, ".git")); err == nil && gitDir.IsDir() && testGitExecutable != "" {

@@ -474,7 +474,7 @@ func waitForRunTerminalState(t *testing.T, d *db.DB, runID string) *db.Run {
 	timeout := 5 * time.Second
 	if runtime.GOOS == "windows" {
 		// Git-backed daemon runs routinely take about 10x longer on Windows,
-		// especially while the git-heavy CI shard runs several packages at once.
+		// especially while several git-heavy test packages run at once.
 		// Keep the assertion bounded without treating normal process-spawn load as
 		// a pipeline failure.
 		timeout = time.Minute
@@ -501,7 +501,7 @@ func waitForRunTerminalState(t *testing.T, d *db.DB, runID string) *db.Run {
 // that launch RunWithOptions in a goroutine and then wait for a recovered run to
 // go terminal must gate on this first: otherwise their terminal-state deadline
 // has to absorb the entire cold daemon startup, which is far slower on the
-// process-spawn-bound Windows runner and made the wait flaky.
+// process-spawn-bound Windows hosts and made the wait flaky.
 func waitForDaemonReady(t *testing.T, p *paths.Paths) {
 	t.Helper()
 	waitForDaemonReadyOrExit(t, p, nil)

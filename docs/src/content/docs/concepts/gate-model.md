@@ -109,23 +109,14 @@ An aborted run that also holds other unpublished commits, such as a review fix, 
 A finished run whose published head the operator's rewritten branch does not contain refuses the same way, and no next action resolves it: replacing a published head is the operator's decision, made with `no-mistakes sync --replace-published` (see [Replacing a published head](/no-mistakes/reference/cli/#replacing-a-published-head)).
 That command pins the published head at the run's recovery ref `refs/no-mistakes/recover/<run>` in the gate before the gate branch moves, then moves the branch to the local head by compare-and-swap, so the published commits stay on the machine and the next submission needs no reconciliation.
 
-**Accepted Decision 41-A (issue #983):** pipeline publication may replace a private mirror head that is **exactly equal to a head the publishing run itself placed on the mirror** without patch-ID or tree-survival proof: its `Run.SubmittedHeadSHA`, or, once it has published, its durable `Run.LastPushedSHA`.
-The last pushed head is recorded only after a verified push to the configured push target and mirror settlement, so it is never an external or newer head.
-The exception was accepted for reviewed rebases and conflict resolutions that changed the submitted patch.
-The pipeline no longer rebases or resolves conflicts: a moved base, at Rebase or as a CI merge-conflict repair, enters as a merge commit on top of the head it integrates, which reaches the mirror as an ordinary descendant.
-Publication now also requires the published head to contain both of the heads the exception names (see [Publication keeps the run's history](#publication-keeps-the-runs-history)), so a mirror at either one is an ancestor that needs no reconciliation, and the exception no longer fires during publication.
-The exception keeps exactly its accepted scope.
-The replacement head must still be review-approved, and the force push to the configured target stays leased on the same last pushed head.
-Ownership is not containment evidence.
-The exception does not extend to another recorded head, an agent-created head, an abbreviated SHA, or an external, newer, or divergent private head.
-Fresh AXI submissions do not receive this exception.
+Decision 41-A (issue #983) once let pipeline publication replace a mirror head exactly equal to the run's submitted or last pushed head without this proof, for reviewed rebases and conflict resolutions; it was removed once the pipeline stopped rewriting history and publication began requiring the published head to contain both heads, which left no run able to reach it.
 
 Reconciliation requires direct private branch and archive refs; symbolic refs,
 including dangling symbolic refs, are refused before containment checks. Ref
 creation and deletion use exact names without dereferencing and expected old
 values. Before deleting a reconciled branch ref, the gate archives its exact
-head at `refs/tags/no-mistakes-abandoned/<branch>/<sha>`. Outside Decision 41-A,
-unproven private content refuses before upstream publication, leaves the
+head at `refs/tags/no-mistakes-abandoned/<branch>/<sha>`. Unproven private
+content refuses before upstream publication, leaves the
 private branch untouched, and names every at-risk commit. An ancestor already
 supports an ordinary fast-forward. A gate head that is a newer descendant of
 the published head stays untouched, including through the detached worktree's

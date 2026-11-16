@@ -1224,6 +1224,60 @@ func TestPushStep_GateMirrorDoesNotRewindNewerInterveningPush(t *testing.T) {
 	}
 }
 
+// The push step knows the run's submitted and last pushed heads, so it is the
+// one caller that could hand the gate an exception for them. A mirror at either
+// head whose content the pushed head does not carry is refused before anything
+// is published, with the at-risk commit named and the mirror left as it was.
+func TestPushStep_MirrorPlanningRefusesTheRunsUnprovenHeads(t *testing.T) {
+	for _, recorded := range []string{"submitted", "last_pushed"} {
+		t.Run(recorded, func(t *testing.T) {
+			dir, baseSHA, submittedHead := setupGitRepo(t)
+			sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, submittedHead, config.Commands{})
+			sctx.Run.SubmittedHeadSHA = &submittedHead
+			sctx.Run.Branch = "feature"
+			mirrorHead := submittedHead
+			if recorded == "last_pushed" {
+				// The run published a pipeline commit on its submitted head.
+				if err := os.WriteFile(filepath.Join(dir, "pipeline.txt"), []byte("pipeline fix\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				gitCmd(t, dir, "add", "-A")
+				gitCmd(t, dir, "commit", "-m", "no-mistakes(lint): pipeline fix")
+				mirrorHead = gitCmd(t, dir, "rev-parse", "HEAD")
+				if err := sctx.DB.UpdateRunPublication(sctx.Run.ID, db.PushBinding{HeadSHA: mirrorHead, TargetKind: "origin", Ref: "refs/heads/feature"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gateDir := t.TempDir()
+			sctx.GateDir = gateDir
+			gitCmd(t, gateDir, "init", "--bare")
+			gitCmd(t, gateDir, "fetch", dir, mirrorHead+":refs/heads/feature")
+			gitCmd(t, dir, "checkout", "--detach", baseSHA)
+			if err := os.WriteFile(filepath.Join(dir, "reviewed.txt"), []byte("reviewed\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitCmd(t, dir, "add", "-A")
+			gitCmd(t, dir, "commit", "-m", "reviewed rewrite")
+			reviewedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+			plan, err := planGateMirrorReconciliation(sctx.Ctx, sctx, "refs/heads/feature", "feature", reviewedHead)
+			if err == nil || plan.Reconcile {
+				t.Fatalf("the run's unproven %s head was planned for reconciliation: plan=%+v err=%v", recorded, plan, err)
+			}
+			for _, want := range []string{"refusing to reconcile", submittedHead, mirrorHead} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal missing %q: %v", want, err)
+				}
+			}
+			if got := gitCmd(t, gateDir, "rev-parse", "refs/heads/feature"); got != mirrorHead {
+				t.Fatalf("refusal moved the mirror to %s, want %s", got, mirrorHead)
+			}
+			if tags := gitCmd(t, gateDir, "tag", "--list", "no-mistakes-abandoned/*"); tags != "" {
+				t.Fatalf("refusal archived the mirror head: %s", tags)
+			}
+		})
+	}
+}
+
 func TestPushStep_MirrorMovesAfterPlanning(t *testing.T) {
 	for _, descendant := range []bool{true, false} {
 		t.Run(fmt.Sprintf("descendant=%t", descendant), func(t *testing.T) {
@@ -1241,6 +1295,9 @@ func TestPushStep_MirrorMovesAfterPlanning(t *testing.T) {
 			}
 			gitCmd(t, dir, "add", "-A")
 			gitCmd(t, dir, "commit", "-m", "reviewed rewrite")
+			// The rewrite carries the submitted commit's own patch, so the
+			// content proof accepts the mirror head and planning reconciles it.
+			gitCmd(t, dir, "cherry-pick", submittedHead)
 			reviewedHead := gitCmd(t, dir, "rev-parse", "HEAD")
 			plan, err := planGateMirrorReconciliation(sctx.Ctx, sctx, "refs/heads/feature", "feature", reviewedHead)
 			if err != nil || !plan.Reconcile {

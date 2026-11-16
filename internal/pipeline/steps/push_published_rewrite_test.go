@@ -10,7 +10,8 @@ import (
 )
 
 // TestPushStep_RefusesAReviewedRebaseOfTheRunsOwnPublishedHead keeps the
-// reproduction that once justified Decision 41-A's last-pushed-head exception:
+// reproduction that once justified Decision 41-A's last-pushed-head exception,
+// since removed:
 // a run published a head carrying a pipeline commit, the base took the same
 // migration number, and the old CI merge-conflict repair rebased onto it and
 // resolved the conflict, rewriting every patch of the published range. Review

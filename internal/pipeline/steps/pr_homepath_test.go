@@ -36,7 +36,7 @@ const (
 // filepath.Clean(p) == p for this platform, and a POSIX root satisfies neither
 // on Windows. With a POSIX fixture the artifact is dropped before rendering, so
 // the case stops testing redaction and quietly asserts nothing - which is
-// exactly how these passed on Linux and macOS while failing on windows-git.
+// exactly how these passed on Linux and macOS while failing on Windows.
 var fixtureEvidenceDir = filepath.Join(fixtureNativeHome(), ".no-mistakes", "evidence", "run-1")
 
 func fixtureNativeHome() string {

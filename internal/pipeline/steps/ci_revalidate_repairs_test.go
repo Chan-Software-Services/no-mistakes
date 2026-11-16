@@ -22,7 +22,7 @@ import (
 // observe what a repair does to the local head, the remote, and the run's
 // review authority. Tests using this process-heavy fixture intentionally run
 // serially: running all of their git and fake-gh subprocesses in parallel can
-// exhaust macOS CI process capacity and stall a child indefinitely.
+// exhaust a macOS host's process capacity and stall a child indefinitely.
 type ciRepairFixture struct {
 	sctx     *pipeline.StepContext
 	dir      string

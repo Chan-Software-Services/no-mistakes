@@ -138,6 +138,54 @@ func TestDocumentStep_EmDashInCodeIsNeverRewritten(t *testing.T) {
 	}
 }
 
+// TestDocumentStep_EmDashInIndentedCodeIsNeverRewritten: an em dash the step
+// writes on a line of an indented code block in a .md file is code, so it is
+// committed as written, while one on a list item's continuation paragraph,
+// indented just as far, is prose and rewritten. An .mdx file has no indented
+// code blocks, so the same block there is rewritten.
+func TestDocumentStep_EmDashInIndentedCodeIsNeverRewritten(t *testing.T) {
+	t.Parallel()
+	for _, mode := range documentModes {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+			dir, baseSHA, headSHA := seedDocs(t, map[string]string{
+				"docs/a.md":  "# Guide\n\nIntro.\n",
+				"docs/b.mdx": "# Guide\n\nIntro.\n",
+			})
+			ag := &mockAgent{
+				name: "test",
+				runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+					writeDoc(t, dir, "docs/a.md", "# Guide\n\nIntro.\nRun:\n\n    echo a \u2014 b\n\n- item\n\n    more \u2014 text\n")
+					writeDoc(t, dir, "docs/b.mdx", "# Guide\n\nIntro.\nRun:\n\n    echo a \u2014 b\n")
+					return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"refresh docs"}`)}, nil
+				},
+			}
+			sctx, logs := newDocumentGuardContext(t, ag, dir, baseSHA, headSHA, mode.cmds, mode.fixing)
+
+			if _, err := (&DocumentStep{}).Execute(sctx); err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range map[string]string{
+				"docs/a.md":  "# Guide\n\nIntro.\nRun:\n\n    echo a \u2014 b\n\n- item\n\n    more - text\n",
+				"docs/b.mdx": "# Guide\n\nIntro.\nRun:\n\n    echo a - b\n",
+			} {
+				if got := committedDoc(t, dir, name); got != want {
+					t.Errorf("%s committed as\n%q\nwant\n%q", name, got, want)
+				}
+			}
+			joined := strings.Join(*logs, "\n")
+			for _, want := range []string{
+				"rewrote 1 em dash(es) in docs/a.md",
+				"rewrote 1 em dash(es) in docs/b.mdx",
+			} {
+				if !strings.Contains(joined, want) {
+					t.Errorf("log missing %q:\n%s", want, joined)
+				}
+			}
+		})
+	}
+}
+
 func TestDocumentStep_PromptForbidsTheEmDash(t *testing.T) {
 	t.Parallel()
 	for _, mode := range documentModes {
@@ -220,6 +268,61 @@ func TestMarkdownCodeFences(t *testing.T) {
 					t.Errorf("line %d %q: code = %v, want %v", i+1, line, got, tc.code[i])
 				}
 				offset += len(line)
+			}
+		})
+	}
+}
+
+// TestMarkdownIndentedCode: which em dashes the rewrite keeps as indented
+// code and which it rewrites, line by line; mdx reads the content as an .mdx
+// file, which has no indented code blocks.
+func TestMarkdownIndentedCode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, content, want string
+		mdx                 bool
+	}{
+		{name: "block after a paragraph", content: "Run:\n\n    a — b\n\nnext\n"},
+		{name: "tab-indented block", content: "Run:\n\n\ta — b\n"},
+		{name: "block at the start of the file", content: "    a — b\n"},
+		{name: "second line of a block", content: "Run:\n\n    x\n    a — b\n"},
+		{name: "block line after a blank line inside the block", content: "Run:\n\n    x\n\n    a — b\n"},
+		{name: "block right after a closed fence", content: "```\nx\n```\n    a — b\n"},
+		{name: "block right after a heading", content: "# Title\n    a — b\n"},
+		{name: "block inside a list item", content: "- item\n\n      a — b\n"},
+		{name: "block inside an ordered item", content: "1. item\n\n       a — b\n"},
+		{name: "block inside a nested item", content: "- a\n  - b\n\n        a — b\n"},
+		{name: "block after the list ended", content: "- item\n\ntext\n\n    a — b\n"},
+		{name: "marker then five spaces", content: "-     a — b\n"},
+		{name: "empty item with trailing spaces opens a paragraph", content: "-     \n      a — b\n", want: "-     \n      a - b\n"},
+		{name: "list continuation indented four", content: "- item\n\n    more — text\n", want: "- item\n\n    more - text\n"},
+		{name: "ordered list continuation indented four", content: "1. item\n\n    more — text\n", want: "1. item\n\n    more - text\n"},
+		{name: "nested list continuation", content: "- a\n  - b\n\n      more — text\n", want: "- a\n  - b\n\n      more - text\n"},
+		{name: "lazy continuation of a paragraph", content: "para\n    still — para\n", want: "para\n    still - para\n"},
+		{name: "lazy continuation in a list item", content: "- item\n      still — item\n", want: "- item\n      still - item\n"},
+		{name: "three spaces is not code", content: "Run:\n\n   a — b\n", want: "Run:\n\n   a - b\n"},
+		{name: "item text itself", content: "- a — b\n", want: "- a - b\n"},
+		{name: "nested item after a blank line", content: "- a\n\n  - b — c\n", want: "- a\n\n  - b - c\n"},
+		{name: "heading with a span", content: "# A `b — c` — d\n", want: "# A `b — c` - d\n"},
+		{name: "paragraph after a block", content: "    x\n\ntext — here\n", want: "    x\n\ntext - here\n"},
+		{name: "mdx reading of a block after a paragraph", content: "Run:\n\n    a — b\n", want: "Run:\n\n    a - b\n", mdx: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			want := tc.want
+			if want == "" {
+				want = tc.content
+			}
+			code := markdownCodeIn(tc.content, !tc.mdx)
+			var got strings.Builder
+			offset := 0
+			for _, line := range splitLinesKeepEnds(tc.content) {
+				rewritten, _ := rewriteEmDash(line, code[offset:offset+len(line)])
+				got.WriteString(rewritten)
+				offset += len(line)
+			}
+			if got.String() != want {
+				t.Errorf("rewritten as\n%q\nwant\n%q", got.String(), want)
 			}
 		})
 	}

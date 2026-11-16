@@ -13,15 +13,17 @@ import (
 // ciWorkflow is a minimal typed view of .github/workflows/ci.yml, capturing only
 // what the Linux-only CI contract pins.
 type ciWorkflow struct {
-	On   map[string]any           `yaml:"on"`
-	Jobs map[string]ciWorkflowJob `yaml:"jobs"`
+	On          map[string]any           `yaml:"on"`
+	Permissions any                      `yaml:"permissions"`
+	Jobs        map[string]ciWorkflowJob `yaml:"jobs"`
 }
 
 type ciWorkflowJob struct {
-	Name     string         `yaml:"name"`
-	RunsOn   any            `yaml:"runs-on"`
-	Strategy map[string]any `yaml:"strategy"`
-	Steps    []wfStep       `yaml:"steps"`
+	Name        string         `yaml:"name"`
+	Permissions any            `yaml:"permissions"`
+	RunsOn      any            `yaml:"runs-on"`
+	Strategy    map[string]any `yaml:"strategy"`
+	Steps       []wfStep       `yaml:"steps"`
 }
 
 func loadCIWorkflow(t *testing.T) ciWorkflow {
@@ -99,5 +101,23 @@ func TestCIWorkflowTestJobRunsTheRaceSuiteAndBuilds(t *testing.T) {
 	want := []string{"go test -race ./...", "go build ./cmd/no-mistakes"}
 	if !slices.Equal(runs, want) {
 		t.Fatalf("test job commands = %q, want %q", runs, want)
+	}
+}
+
+// Every CI run gets a read-only token: the workflow grants contents: read and
+// nothing else, and no job sets its own permissions block, since no job writes
+// to GitHub.
+func TestCIWorkflowTokenIsReadOnly(t *testing.T) {
+	t.Parallel()
+
+	wf := loadCIWorkflow(t)
+	perms, ok := wf.Permissions.(map[string]any)
+	if !ok || len(perms) != 1 || perms["contents"] != "read" {
+		t.Fatalf("CI workflow permissions = %v, want exactly contents: read", wf.Permissions)
+	}
+	for id, job := range wf.Jobs {
+		if job.Permissions != nil {
+			t.Errorf("job %q sets permissions %v; no CI job writes to GitHub, so no job sets its own block beside the workflow's read-only token", id, job.Permissions)
+		}
 	}
 }
