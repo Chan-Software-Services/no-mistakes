@@ -18,6 +18,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -148,6 +149,13 @@ func TestEvalCaptureSetsReportAndRelabelAreIdempotentAtTheCLI(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("NM_HOME", root)
 	chdir(t, t.TempDir())
+	// eval capture's object-pool fetch and the fixture's commits and pushes
+	// otherwise start detached auto-maintenance inside the tree nmHomeTree
+	// walks; no run has yet shown that tree changing between the walks, and
+	// the trace check at the end keeps the starts from coming back.
+	testgit.IgnoreUserGitConfig(t)
+	trace := testgit.TraceGit(t)
+	testgit.TurnOffAutoMaintenance(t)
 
 	findings := `{"findings":[{"id":"real-bug","severity":"error","file":"main.go","line":3,"description":"bug","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"bug","risk_scope":"source-or-external"}`
 	fixture := setupEvalCLIFixture(t, ctx, root, findings)
@@ -183,6 +191,7 @@ func TestEvalCaptureSetsReportAndRelabelAreIdempotentAtTheCLI(t *testing.T) {
 			t.Fatalf("%v changed the app root's shape:\nbefore: %v\nafter:  %v", command, treeBefore, treeAfter)
 		}
 	}
+	testgit.RequireNoAutoMaintenance(t, trace)
 }
 
 func TestEvalRunRendersProgressAndScoreDashboard(t *testing.T) {
@@ -275,6 +284,8 @@ func setupEvalCLIFixture(t *testing.T, ctx context.Context, root, findings strin
 	if err := git.InitBare(ctx, gateDir); err != nil {
 		t.Fatal(err)
 	}
+	// The receive-pack of the pushes below reads only the gate's own config.
+	testgit.TurnOffRepoAutoMaintenance(t, gateDir)
 	workDir := filepath.Join(root, "source")
 	mustCLIGit(t, ctx, root, "clone", gateDir, workDir)
 	mustCLIGit(t, ctx, workDir, "config", "user.email", "eval@example.test")
