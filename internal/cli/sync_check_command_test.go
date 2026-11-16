@@ -3,18 +3,15 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -99,7 +96,12 @@ func TestHumanSurfacesKeepHumanCheckAtRelationUnknown(t *testing.T) {
 func TestAxiAbortNamesAxiCheckAtRelationUnknown(t *testing.T) {
 	f := newCLISyncFixtureAtHome(t, makeSocketSafeTempDir(t))
 	leaveSubmittedHead(t, f)
-	serveFakeAbortDaemon(t, f.runID, "feature/sync")
+	serveFakeAbortDaemon(t, fakeAbortDaemon{
+		active: &ipc.RunInfo{ID: f.runID, Branch: "feature/sync", Status: types.RunRunning},
+		getRun: func(context.Context, int) (*ipc.RunInfo, error) {
+			return &ipc.RunInfo{ID: f.runID, Branch: "feature/sync", Status: types.RunCancelled}, nil
+		},
+	})
 
 	out, err := executeCmd("axi", "abort")
 	if err != nil {
@@ -140,53 +142,14 @@ func TestAxiSyncCheckNamesAxiCheckWhenOffline(t *testing.T) {
 		t.Errorf("axi sync help missing %q:\n%s", want, out)
 	}
 
-	out, _ = executeCmd("sync", "--check")
+	// At blocked_offline the human output names no command at all, so the
+	// human side holds only as never naming the axi form, once the check has
+	// reached the offline state.
+	out, err := executeCmd("sync", "--check")
+	if err == nil || !strings.Contains(out, "could not refresh the configured push target") {
+		t.Fatalf("fixture: human sync --check did not report the offline refusal (err %v):\n%s", err, out)
+	}
 	if strings.Contains(out, "axi sync") {
 		t.Errorf("human sync --check names an axi command:\n%s", out)
 	}
-}
-
-// serveFakeAbortDaemon serves the daemon calls `axi abort` makes: the bound
-// run is active, its cancellation is accepted, and it reads back terminal.
-func serveFakeAbortDaemon(t *testing.T, runID, branch string) {
-	t.Helper()
-	p, err := paths.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := ipc.NewServer()
-	srv.Handle(ipc.MethodHealth, func(context.Context, json.RawMessage) (interface{}, error) {
-		return &ipc.HealthResult{Status: "ok"}, nil
-	})
-	srv.Handle(ipc.MethodGateContext, func(context.Context, json.RawMessage) (interface{}, error) {
-		return &ipc.GateContextResult{Nested: false}, nil
-	})
-	srv.Handle(ipc.MethodGetActiveRun, func(context.Context, json.RawMessage) (interface{}, error) {
-		return &ipc.GetActiveRunResult{Run: &ipc.RunInfo{ID: runID, Branch: branch, Status: types.RunRunning}}, nil
-	})
-	srv.Handle(ipc.MethodCancelRun, func(context.Context, json.RawMessage) (interface{}, error) {
-		return &ipc.CancelRunResult{OK: true}, nil
-	})
-	srv.Handle(ipc.MethodGetRun, func(context.Context, json.RawMessage) (interface{}, error) {
-		return &ipc.GetRunResult{Run: &ipc.RunInfo{ID: runID, Branch: branch, Status: types.RunCancelled}}, nil
-	})
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(p.Socket()) }()
-	t.Cleanup(func() {
-		srv.Close()
-		select {
-		case <-errCh:
-		case <-time.After(time.Second):
-			t.Error("fake daemon did not stop")
-		}
-	})
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if client, dialErr := ipc.Dial(p.Socket()); dialErr == nil {
-			client.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("fake daemon did not start")
 }
