@@ -365,6 +365,7 @@ no-mistakes axi sync          # apply only an offered guarded synchronization
 no-mistakes axi sync --recover  # return custody after a terminal run left unpublished pipeline commits
 no-mistakes axi sync --adopt-published  # adopt an exactly published rebased head into its stale gate lane
 no-mistakes axi logs --step <name> --full   # full log output of one step
+no-mistakes axi findings --step <name>      # one step's recorded findings, verdict and scenarios, nothing cut
 no-mistakes axi abort         # cancel the current-branch active run
 no-mistakes axi abort --run <id>   # cancel a specific run by id (works outside its worktree)
 ` + "```" + `

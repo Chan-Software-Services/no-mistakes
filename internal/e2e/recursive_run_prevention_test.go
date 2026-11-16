@@ -86,6 +86,7 @@ func runRecursiveIncident(t *testing.T, agentName, executable, expectedPhase str
 	for _, label := range []string{
 		"readonly-status",
 		"readonly-logs",
+		"readonly-findings",
 		"readonly-help",
 		"exact-init-marker-present",
 		"exact-axi-run-yes-marker-present",
@@ -106,7 +107,7 @@ func runRecursiveIncident(t *testing.T, agentName, executable, expectedPhase str
 			t.Errorf("incident output missing %s:\n%s", label, output)
 		}
 	}
-	for _, label := range []string{"readonly-status", "readonly-logs", "readonly-help"} {
+	for _, label := range []string{"readonly-status", "readonly-logs", "readonly-findings", "readonly-help"} {
 		section := incidentAttemptSection(output, label)
 		if !strings.Contains(section, "exit: 0") || strings.Contains(section, "nested_gate_context") {
 			t.Errorf("safe read-only action %s was unavailable:\n%s", label, section)
@@ -120,6 +121,7 @@ func runRecursiveIncident(t *testing.T, agentName, executable, expectedPhase str
 		"phase: " + expectedPhase,
 		"Return control to the outer executor",
 		"no-mistakes axi status",
+		"no-mistakes axi findings --run " + outer.ID + " --step <phase>",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("incident refusal missing %q:\n%s", want, output)
@@ -242,6 +244,7 @@ case "$prompt" in
       run_id=$(basename "$PWD")
       run_attempt readonly-status no-mistakes axi status --run "$run_id"
       run_attempt readonly-logs no-mistakes axi logs --run "$run_id" --step document
+      run_attempt readonly-findings no-mistakes axi findings --run "$run_id" --step document
       run_attempt readonly-help no-mistakes axi run --help
       run_attempt exact-init-marker-present no-mistakes init
       run_attempt exact-axi-run-yes-marker-present no-mistakes axi run --yes --intent "Validate the complete committed branch diff, push it, open a PR, and continue until CI is green."

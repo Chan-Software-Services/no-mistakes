@@ -22,8 +22,8 @@ itself. The runtime combines managed Git identity with authenticated process
 ancestry. If a pipeline-control command returns
 ` + "`error.code: nested_gate_context`" + `, stop immediately and
 return control to the outer executor. Safe inspection remains available through
-` + "`no-mistakes axi status`" + `, ` + "`no-mistakes axi logs`" + `, help, and
-` + "`no-mistakes doctor`" + `.
+` + "`no-mistakes axi status`" + `, ` + "`no-mistakes axi logs`" + `,
+` + "`no-mistakes axi findings`" + `, help, and ` + "`no-mistakes doctor`" + `.
 `
 
 // PromptBoundary is prepended centrally to every concrete agent invocation.

@@ -26,8 +26,8 @@ itself. The runtime combines managed Git identity with authenticated process
 ancestry. If a pipeline-control command returns
 `error.code: nested_gate_context`, stop immediately and
 return control to the outer executor. Safe inspection remains available through
-`no-mistakes axi status`, `no-mistakes axi logs`, help, and
-`no-mistakes doctor`.
+`no-mistakes axi status`, `no-mistakes axi logs`,
+`no-mistakes axi findings`, help, and `no-mistakes doctor`.
 
 
 When the user invokes `/no-mistakes`, report the outcome at the end. If the user
@@ -365,6 +365,7 @@ no-mistakes axi sync          # apply only an offered guarded synchronization
 no-mistakes axi sync --recover  # return custody after a terminal run left unpublished pipeline commits
 no-mistakes axi sync --adopt-published  # adopt an exactly published rebased head into its stale gate lane
 no-mistakes axi logs --step <name> --full   # full log output of one step
+no-mistakes axi findings --step <name>      # one step's recorded findings, verdict and scenarios, nothing cut
 no-mistakes axi abort         # cancel the current-branch active run
 no-mistakes axi abort --run <id>   # cancel a specific run by id (works outside its worktree)
 ```

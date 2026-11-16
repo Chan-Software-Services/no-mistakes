@@ -324,7 +324,10 @@ Each row reports the whole step's elapsed time as `active_for`, the displayed ex
 `round_active_for` resets when a fix round starts; older active runs created before this timing was recorded show it as empty.
 If no activity arrives for longer than `step_quiet_warning`, `last_activity` is prefixed with `quiet`; this is only a liveness signal and does not cancel the step.
 For older active runs with no recorded activity timestamp, AXI falls back to the step log file modification time.
-Gate summaries and finding descriptions are bounded in this default status view; truncated values disclose their original length, and the gate help points to `no-mistakes axi logs --step <step> --full` for an implicitly resolved run or `no-mistakes axi logs --run <id> --step <step> --full` for an explicitly selected run.
+Gate summaries and finding descriptions are bounded in this default status view (1200 and 600 characters); truncated values disclose their original length.
+When the gate cut a summary or a description, its help names [`no-mistakes axi findings --step <step>`](#no-mistakes-axi-findings), which prints every finding whole.
+The gate help always points to `no-mistakes axi logs --step <step> --full` for the full step log.
+For an explicitly selected run both commands carry `--run <id>`.
 Relevant current-branch states also include a cached `branch_sync` object with full SHAs, the run's status, the persisted pipeline push binding, target kind and ref, relation, safety result, PR lifecycle, and a structured next action.
 Cached home and status rendering performs no network read and labels the remote observation `pipeline_push`; only explicit sync check or apply reports `live` freshness.
 
@@ -421,6 +424,28 @@ Without `--full`, long logs show the last 40 lines and a help hint for the full 
 Step logs include native subprocess agent lifecycle lines such as `codex started pid=4242`, `codex exited pid=4242 status=success`, and transient retry messages when the selected agent supports lifecycle events.
 They also include fix-loop markers such as `auto-fix round 1/3 starting after round 1` and `user-fix round starting after round 2`.
 `--step` accepts the nine core step names and valid repository gate names such as `gate.test.mutation-budget`. Use the exact gate name shown by `axi status`.
+
+## no-mistakes axi findings
+
+Show one step's recorded findings with nothing cut.
+Where the home view, `axi run`, `axi respond` and `axi status` show a gate, they bound its summary at 1200 characters and each finding description at 600; this command prints them whole, so a worker that may not read the gate's directory can still read a long finding.
+
+```sh
+no-mistakes axi findings --step review
+no-mistakes axi findings --step test --run <id>
+```
+
+| Flag     | Type     | Default            | Description         |
+| -------- | -------- | ------------------ | ------------------- |
+| `--step` | `string` | (none)             | Step name; required |
+| `--run`  | `string` | current-branch run | Run ID to inspect   |
+
+`--step` takes the same names as [`axi logs`](#no-mistakes-axi-logs), and a missing or unknown step is the same exit-`2` error.
+The run is resolved exactly as `axi logs` resolves it: this branch's active run, else its most recent one, never another branch's; `--run <id>` reads exactly that run and is observation only.
+The output is `step`, `run` and `status`, then, when the step recorded them, `summary`, `risk`, `risk_rationale`, `verdict`, `testing_summary`, `tested`, a `scenarios` table (`name`, `result`, `live`, `evidence`, `reason`) and a `findings` table (`id`, `severity`, `file`, `line`, `action`, `description`).
+A step with no recorded findings prints `findings: no findings recorded for step "<step>" in this run`, and a step the run has no record of reports `status: not recorded`.
+It reads the step's current recorded findings from the local database, so it works whether or not the daemon is running.
+Like `axi status` and `axi logs`, it emits no telemetry and is allowed from inside an active validation step.
 
 ## no-mistakes axi abort
 
