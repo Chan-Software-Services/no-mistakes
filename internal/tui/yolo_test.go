@@ -158,6 +158,56 @@ func TestModel_Yolo_OrdinaryReviewFindingsAreStillFixed(t *testing.T) {
 	}
 }
 
+// Yolo turned on while the TUI's authoritative read is still in flight (as it
+// is right after attaching) cannot act yet; the read's arrival must then
+// resolve the parked gate, since a gate parked on a human sends no later event.
+func TestModel_Yolo_ActsWhenTheReconcileInFlightAtTheKeypressLands(t *testing.T) {
+	sock, client, snapshot := captureRespond(t)
+	run := testRun()
+	run.StateRev = 1
+	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	run.Steps[0].FindingsJSON = &fj
+	m := NewModel(sock, client, run)
+	m.reconcilePending = true
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if !m.yoloMode {
+		t.Fatal("precondition: y did not turn yolo on")
+	}
+	if cmd != nil {
+		_ = cmd()
+	}
+	if calls := snapshot(); len(calls) != 0 {
+		t.Fatalf("yolo responded while the reconcile was pending: %+v", calls)
+	}
+
+	reconciled := testRun()
+	reconciled.StateRev = 2
+	reconciled.Steps[0].Status = types.StepStatusAwaitingApproval
+	reconciled.Steps[0].FindingsJSON = &fj
+	_, cmd = m.Update(runReconciledMsg{run: reconciled, subscriptionID: m.subscriptionID})
+	runAll(cmd)
+
+	calls := snapshot()
+	if len(calls) != 1 || calls[0].Action != types.ActionFix {
+		t.Fatalf("yolo did not fix the parked gate once the reconcile landed: %+v", calls)
+	}
+}
+
+// runAll runs a command, and each command of a batch it returns.
+func runAll(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runAll(c)
+		}
+	}
+}
+
 func TestModel_Update_YoloKeyTogglesMode(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)

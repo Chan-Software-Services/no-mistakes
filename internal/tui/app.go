@@ -297,6 +297,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.streamClosed && !m.done {
 			cmds = append(cmds, m.startResubscribe())
 		}
+		// Yolo cannot act while a read is pending (approvalReady), so a gate
+		// it was turned on at during one is resolved here: a gate parked on a
+		// human sends no later event that would.
+		cmds = append(cmds, m.maybeAutoApproveCmd())
 		return m, tea.Batch(cmds...)
 
 	case subscriptionErrMsg:
