@@ -85,7 +85,11 @@ func TestCIWorkflowRunsOnLinuxOnly(t *testing.T) {
 		}
 		if id == e2eShardJob {
 			for _, shard := range e2eShards(t, job) {
-				checks = append(checks, strings.ReplaceAll(name, "${{ matrix.shard }}", fmt.Sprint(shard)))
+				shards := len(e2eShards(t, job))
+				checks = append(checks, strings.NewReplacer(
+					"${{ matrix.shard }}", fmt.Sprint(shard),
+					"${{ strategy.job-total }}", fmt.Sprint(shards),
+				).Replace(name))
 			}
 		} else {
 			checks = append(checks, name)
@@ -105,7 +109,7 @@ func TestCIWorkflowRunsOnLinuxOnly(t *testing.T) {
 }
 
 // Each e2e shard runs its share through scripts/e2e.sh with the matrix's own
-// count, every shard reports even when another fails, and the e2e check runs
+// length as the count (strategy.job-total, so the count is written once), every shard reports even when another fails, and the e2e check runs
 // after them all, whatever they concluded, and passes only when every one
 // passed: a skipped roll-up, or one that read a single shard, would let a red
 // shard through.
@@ -117,8 +121,8 @@ func TestCIWorkflowE2EShardsRollUpIntoTheE2ECheck(t *testing.T) {
 	if !ok {
 		t.Fatalf("CI workflow has no %s job", e2eShardJob)
 	}
-	count := len(e2eShards(t, shardJob))
-	if want := fmt.Sprintf("e2e shard ${{ matrix.shard }}/%d", count); shardJob.Name != want {
+	e2eShards(t, shardJob)
+	if want := "e2e shard ${{ matrix.shard }}/${{ strategy.job-total }}"; shardJob.Name != want {
 		t.Errorf("%s name = %q, want %q", e2eShardJob, shardJob.Name, want)
 	}
 	if ff, ok := shardJob.Strategy["fail-fast"].(bool); !ok || ff {
@@ -130,7 +134,7 @@ func TestCIWorkflowE2EShardsRollUpIntoTheE2ECheck(t *testing.T) {
 			runs = append(runs, run)
 		}
 	}
-	if want := []string{fmt.Sprintf("bash scripts/e2e.sh --shard ${{ matrix.shard }}/%d", count)}; !slices.Equal(runs, want) {
+	if want := []string{"bash scripts/e2e.sh --shard ${{ matrix.shard }}/${{ strategy.job-total }}"}; !slices.Equal(runs, want) {
 		t.Errorf("%s commands = %q, want %q", e2eShardJob, runs, want)
 	}
 

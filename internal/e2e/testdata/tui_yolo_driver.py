@@ -36,6 +36,7 @@ buf = bytearray()
 # Each terminal query the TUI may send and the answer a dark terminal gives.
 ANSWERS = (
     (b"\x1b]11;?\x1b\\", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
+    (b"\x1b]11;?\x07", b"\x1b]11;rgb:0000/0000/0000\x07"),
     (b"\x1b[6n", b"\x1b[1;1R"),
 )
 answered = [0] * len(ANSWERS)

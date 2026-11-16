@@ -125,6 +125,7 @@ func TestE2EScriptShardsDealEveryTestOnce(t *testing.T) {
 
 	const shards = 3
 	seen := map[string]int{}
+	var firstShard []string
 	for i := 1; i <= shards; i++ {
 		shard := fmt.Sprintf("%d/%d", i, shards)
 		code, out, tests := runE2EScript(t, nil, "--shard", shard)
@@ -140,7 +141,7 @@ func TestE2EScriptShardsDealEveryTestOnce(t *testing.T) {
 				t.Errorf("shard %s ran %q, want -tags=e2e -count=1 -timeout 480s", shard, line)
 			}
 			switch {
-			case strings.HasSuffix(line, " ./internal/e2e/"):
+			case strings.HasSuffix(line, " ./internal/e2e/..."):
 				e2eRuns = append(e2eRuns, line)
 			case strings.HasSuffix(line, " ./internal/pipeline/steps/..."):
 				stepsRuns = append(stepsRuns, line)
@@ -154,10 +155,17 @@ func TestE2EScriptShardsDealEveryTestOnce(t *testing.T) {
 		if len(e2eRuns) != 1 {
 			t.Fatalf("shard %s e2e runs = %q, want one", shard, e2eRuns)
 		}
-		if wantSteps := map[bool]int{true: 1, false: 0}[i == 1]; len(stepsRuns) != wantSteps {
+		wantSteps := 0
+		if i == 1 {
+			wantSteps = 1
+		}
+		if len(stepsRuns) != wantSteps {
 			t.Errorf("shard %s steps runs = %q, want %d", shard, stepsRuns, wantSteps)
 		}
 		names := runPattern(t, e2eRuns[0])
+		if i == 1 {
+			firstShard = names
+		}
 		if !slices.IsSorted(names) {
 			t.Errorf("shard %s names %q are not in name order", shard, names)
 		}
@@ -176,9 +184,8 @@ func TestE2EScriptShardsDealEveryTestOnce(t *testing.T) {
 
 	// Round-robin in name order: the three UserJourney tests sort together
 	// and so land in three different shards.
-	_, _, first := runE2EScript(t, nil, "--shard", "1/3")
-	if got := runPattern(t, first[1]); !slices.Equal(got, []string{"TestAlpha", "TestUserJourneyClaude", "TestZulu"}) {
-		t.Errorf("shard 1/3 = %q, want every third name from the first", got)
+	if !slices.Equal(firstShard, []string{"TestAlpha", "TestUserJourneyClaude", "TestZulu"}) {
+		t.Errorf("shard 1/3 = %q, want every third name from the first", firstShard)
 	}
 }
 

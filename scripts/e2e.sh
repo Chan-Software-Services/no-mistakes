@@ -6,7 +6,7 @@
 #   scripts/e2e.sh --shard <i>/<n>  shard i of n, as CI's e2e shard jobs run it
 #   scripts/e2e.sh <go test args>   go test with exactly these arguments
 #
-# A shard runs every n-th test of ./internal/e2e in name order (round-robin
+# A shard runs every n-th test of ./internal/e2e/... in name order (round-robin
 # from the i-th, from `go test -list`), so each test runs in exactly one
 # shard; shard 1 then runs the ./internal/pipeline/steps/... packages, in a
 # second go test so the -run filter does not reach them. The e2e tests cannot
@@ -31,10 +31,11 @@ cd "$ROOT" || exit 1
 
 # The whole suite's cap is half again over CI's slowest whole-package run
 # (477s before it was sharded). A shard's cap covers each of its go test
-# processes; a shard of three ran in about a third of that.
+# processes: its share of ./internal/e2e, which is about a third of the
+# package with three shards, and on shard 1 the steps packages.
 WHOLE_TIMEOUT=720s
 SHARD_TIMEOUT=480s
-E2E_PKG=./internal/e2e/
+E2E_PKGS=./internal/e2e/...
 STEPS_PKGS=./internal/pipeline/steps/...
 
 usage() {
@@ -97,18 +98,19 @@ trap 'reap_inventory; if [[ "${OWNED_INVENTORY}" -eq 1 ]]; then rm -rf "$NM_E2E_
 
 run_shard() {
   local list names selected code=0
-  if ! list="$(go test -tags=e2e -list '.*' "$E2E_PKG")"; then
+  if ! list="$(go test -tags=e2e -list '.*' "$E2E_PKGS")"; then
     printf '%s\n' "$list" >&2
     return 1
   fi
-  # Test names are the lines that are a bare identifier; the package's own
-  # ok line has spaces in it.
-  names="$(printf '%s\n' "$list" | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' | LC_ALL=C sort)"
+  # Test names are the lines that are a bare identifier; each package's ok
+  # line has spaces in it. A name two packages share is one entry, and its
+  # shard's -run runs it in both.
+  names="$(printf '%s\n' "$list" | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' | LC_ALL=C sort -u)"
   selected="$(printf '%s\n' "$names" | awk -v n="$SHARD_COUNT" -v i="$SHARD_INDEX" 'NF && (NR - 1) % n == i - 1')"
   printf 'e2e.sh: shard %d/%d runs %d of the %d tests in %s\n' \
-    "$SHARD_INDEX" "$SHARD_COUNT" "$(printf '%s' "$selected" | grep -c .)" "$(printf '%s' "$names" | grep -c .)" "$E2E_PKG" >&2
+    "$SHARD_INDEX" "$SHARD_COUNT" "$(printf '%s' "$selected" | grep -c .)" "$(printf '%s' "$names" | grep -c .)" "$E2E_PKGS" >&2
   if [[ -n "$selected" ]]; then
-    go test -tags=e2e -count=1 -timeout "$SHARD_TIMEOUT" -run "^($(printf '%s' "$selected" | paste -sd '|' -))\$" "$E2E_PKG" || code=$?
+    go test -tags=e2e -count=1 -timeout "$SHARD_TIMEOUT" -run "^($(printf '%s' "$selected" | paste -sd '|' -))\$" "$E2E_PKGS" || code=$?
   fi
   if ((SHARD_INDEX == 1)); then
     local steps=0
@@ -124,7 +126,7 @@ if ((SHARD_COUNT > 0)); then
 fi
 
 if [[ "$#" -eq 0 ]]; then
-  set -- -tags=e2e -count=1 -timeout "$WHOLE_TIMEOUT" ./internal/e2e/... "$STEPS_PKGS"
+  set -- -tags=e2e -count=1 -timeout "$WHOLE_TIMEOUT" "$E2E_PKGS" "$STEPS_PKGS"
 fi
 
 go test "$@"

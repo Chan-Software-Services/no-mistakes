@@ -3,11 +3,13 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,10 +30,6 @@ func TestTUIYoloFixesAGateParkedBeforeAttach(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed; it drives the TUI through a pty")
 	}
-	driver, err := filepath.Abs(filepath.Join("testdata", "tui_yolo_driver.py"))
-	if err != nil {
-		t.Fatalf("resolve tui driver: %v", err)
-	}
 
 	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: axiScenario(t)})
 	h.CommitChange("init-tui-yolo", "seed.txt", "seed\n", "seed for the tui yolo journey")
@@ -50,22 +48,17 @@ func TestTUIYoloFixesAGateParkedBeforeAttach(t *testing.T) {
 		t.Fatal("review step never parked")
 	}
 
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "python3", driver, h.NMBin, fw, "y", branch, "60", "3")
-	cmd.Env = os.Environ()
-	screen, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("drive the TUI: %v\n%s", err, screen)
-	}
-	if !strings.Contains(string(screen), "end yolo") {
+	// The fix only has to be sent before the TUI quits; the wait below
+	// covers the daemon acting on it.
+	screen := pressYoloInTheTUI(t, h, fw, branch, 3*time.Second)
+	if !strings.Contains(screen, "end yolo") {
 		t.Fatalf("yolo mode never engaged in the TUI:\n%s", screen)
 	}
 
 	// Yolo's fix sends the finding to the fixer, and the rereview parks the
 	// step again as a fix review.
 	if fixed := waitForStepStatus(t, h, branch, types.StepReview, types.StepStatusFixReview, 90*time.Second); fixed == nil {
-		t.Fatalf("yolo never fixed the parked review gate; TUI screen:\n%s", lastScreenFrame(string(screen)))
+		t.Fatalf("yolo never fixed the parked review gate; TUI screen:\n%s", lastScreenFrame(screen))
 	}
 	sawFixer := false
 	for _, inv := range h.AgentInvocations() {
@@ -76,4 +69,39 @@ func TestTUIYoloFixesAGateParkedBeforeAttach(t *testing.T) {
 	if !sawFixer {
 		t.Fatal("no fix turn was handed the parked finding axi-1")
 	}
+}
+
+// tuiReadyDeadline bounds how long pressYoloInTheTUI waits for the TUI to
+// draw the run before it gives up.
+const tuiReadyDeadline = 60 * time.Second
+
+// yoloStandAsideWindow is how long a test that requires yolo to stand aside
+// keeps the TUI open after the keypress: the window in which a wrongly sent
+// response would land.
+const yoloStandAsideWindow = 8 * time.Second
+
+// pressYoloInTheTUI attaches the real TUI to worktree through a pty
+// (testdata/tui_yolo_driver.py), presses y once the screen shows ready,
+// keeps the TUI open for after, quits it, and returns everything it drew. The
+// caller skips first where the driver cannot run (Windows, no python3). A
+// driver failure fails the test with the driver's own report.
+func pressYoloInTheTUI(t *testing.T, h *Harness, worktree, ready string, after time.Duration) string {
+	t.Helper()
+	driver, err := filepath.Abs(filepath.Join("testdata", "tui_yolo_driver.py"))
+	if err != nil {
+		t.Fatalf("resolve tui driver: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), tuiReadyDeadline+after+30*time.Second)
+	defer cancel()
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "python3", driver, h.NMBin, worktree, "y", ready,
+		strconv.FormatFloat(tuiReadyDeadline.Seconds(), 'f', -1, 64),
+		strconv.FormatFloat(after.Seconds(), 'f', -1, 64))
+	cmd.Env = os.Environ()
+	cmd.Stderr = &stderr
+	screen, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("drive the TUI: %v\n%s\nscreen:\n%s", err, strings.TrimSpace(stderr.String()), screen)
+	}
+	return string(screen)
 }

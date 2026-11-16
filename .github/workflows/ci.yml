@@ -65,10 +65,9 @@ jobs:
   # three runners each take a third of them: scripts/e2e.sh --shard deals the
   # tests out round-robin in name order, and shard 1 also runs the step-local
   # e2e packages. Each shard builds the binary itself, so no build step is
-  # needed. The count is in the name, the command and the matrix; change all
-  # three together.
+  # needed. The shard count is the matrix's length (strategy.job-total).
   e2e-shard:
-    name: e2e shard ${{ matrix.shard }}/3
+    name: e2e shard ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -82,7 +81,7 @@ jobs:
           go-version-file: go.mod
 
       - name: End-to-end suite shard
-        run: bash scripts/e2e.sh --shard ${{ matrix.shard }}/3
+        run: bash scripts/e2e.sh --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # The one e2e check: it passes only when every shard passed, so a shard that
   # failed, was cancelled or never ran fails it.
