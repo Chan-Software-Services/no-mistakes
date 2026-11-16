@@ -203,8 +203,9 @@ func TestView_FirstLineKeepsTheBoxWidthInEveryTitleState(t *testing.T) {
 	}
 }
 
-// TestTitle_EveryStateReachesTheTerminal starts each state's model as
-// bubbletea does, and checks that the title it sets last is the state's own.
+// TestTitle_EveryStateReachesTheTerminal runs each state's first title
+// command and its confirmation, and checks that the title it sets last is the
+// state's own.
 func TestTitle_EveryStateReachesTheTerminal(t *testing.T) {
 	for name, model := range wizardTitleStates() {
 		m := model()
