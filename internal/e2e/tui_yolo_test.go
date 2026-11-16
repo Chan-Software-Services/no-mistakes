@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -27,7 +26,10 @@ import (
 // has landed by the keypress is a race here, so this journey can pass without
 // that fix on a run where the read lands first;
 // TestModel_Yolo_ActsWhenTheReconcileInFlightAtTheKeypressLands pins the
-// order.
+// order. Yolo must then approve the fix review the rereview parks: an event
+// that arrived before its fix started used to approve the first gate again,
+// which the daemon refused, and that approval kept yolo from answering the fix
+// review, so the run stayed parked there.
 func TestTUIYoloFixesAGateParkedBeforeAttach(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the TUI driver uses pty.fork(), which is Unix-only")
@@ -53,24 +55,17 @@ func TestTUIYoloFixesAGateParkedBeforeAttach(t *testing.T) {
 		t.Fatal("review step never parked")
 	}
 
-	// The fix only has to be sent before the TUI quits; the wait below
-	// covers the daemon acting on it.
+	// Yolo answers both gates while the TUI is open: it fixes the parked
+	// finding, and the rereview parks the step again as a fix review, which it
+	// approves. The fake agent's fix and rereview take well under a second, so
+	// the window above covers both; the wait below covers the daemon finishing
+	// the run.
 	screen := pressYoloInTheTUI(t, h, fw, branch, 3*time.Second)
 	if !strings.Contains(screen, "end yolo") {
 		t.Fatalf("yolo mode never engaged in the TUI:\n%s", screen)
 	}
-
-	// Yolo's fix sends the finding to the fixer, and the rereview parks the
-	// step again as a fix review. Yolo is still on for the window above and may
-	// approve that park too, and with the fast fake agent the run then finishes
-	// in a fraction of a second, too soon for a poll to see the park. The TUI
-	// has quit, so nothing resolves a park from here: the run rests at the fix
-	// review or has finished, and either is yolo's fix done.
-	run := waitForYoloFixOutcome(t, h, branch, screen, 90*time.Second)
-	if review, ok := findStep(run.Steps, types.StepReview); ok {
-		t.Logf("after yolo's fix: run %s, review step %s", run.Status, review.Status)
-	}
-	if run.Status.Terminal() && run.Status != types.RunCompleted {
+	run := h.WaitForRun(branch, 90*time.Second)
+	if run.Status != types.RunCompleted {
 		t.Fatalf("run ended %s after yolo's fix, want completed; TUI screen:\n%s", run.Status, lastScreenFrame(screen))
 	}
 	fixer := -1
@@ -89,39 +84,6 @@ func TestTUIYoloFixesAGateParkedBeforeAttach(t *testing.T) {
 	if !rereviewed {
 		t.Fatal("no review ran after the fix turn")
 	}
-}
-
-// waitForYoloFixOutcome polls until branch's run has finished or its review
-// step is parked as a fix review, and returns that run. A run still parked at
-// the first gate when the timeout ends fails the test, with the last frame of
-// screen, the TUI's drawing: yolo never acted.
-func waitForYoloFixOutcome(t *testing.T, h *Harness, branch, screen string, timeout time.Duration) *ipc.RunInfo {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var lastRun *ipc.RunInfo
-	var pollErr error
-	for time.Now().Before(deadline) {
-		var runs []ipc.RunInfo
-		runs, pollErr = h.runs()
-		for i := range runs {
-			run := runs[i]
-			if run.Branch != branch {
-				continue
-			}
-			lastRun = &run
-			if run.Status.Terminal() {
-				return &run
-			}
-			if step, ok := findStep(run.Steps, types.StepReview); ok && step.Status == types.StepStatusFixReview {
-				return &run
-			}
-			break
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	h.dumpDebugState()
-	t.Fatalf("yolo never fixed the parked review gate on %s in %v (%s); TUI screen:\n%s", branch, timeout, polledRunProgress(lastRun, pollErr), lastScreenFrame(screen))
-	return nil
 }
 
 // tuiReadyDeadline bounds how long pressYoloInTheTUI waits for the TUI to
