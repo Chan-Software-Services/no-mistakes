@@ -3,7 +3,10 @@ package steps
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -95,6 +98,15 @@ func unmarshalRequiredTestFindings(raw []byte, findings *Findings) error {
 	if strings.TrimSpace(*payload.TestingSummary) == "" {
 		return fmt.Errorf("empty testing summary")
 	}
+	// The placeholder floor (see minReportTextLetters) is gathered with the
+	// scenario issues below, so one refusal names every placeholder field.
+	var issues []string
+	if !slices.ContainsFunc(*payload.Tested, func(tested string) bool { return reportTextLetters(tested) >= minTestedEntryLetters }) {
+		issues = append(issues, "tested array holds only placeholders - record the commands, tests or checks that were run")
+	}
+	if reportTextLetters(*payload.TestingSummary) < minReportTextLetters {
+		issues = append(issues, fmt.Sprintf("testing summary %s is a placeholder - describe what was exercised and the overall result in a sentence", quotedPlaceholder(*payload.TestingSummary)))
+	}
 	// artifacts is optional: absent, or null as an adapter that fills every
 	// optional field sends it, reads as none, so a field with no evidence value
 	// cannot refuse a whole report (run 01M6KC8W8JRWQJ0RHZ5S25M04W).
@@ -116,7 +128,6 @@ func unmarshalRequiredTestFindings(raw []byte, findings *Findings) error {
 	if len(*payload.Scenarios) == 0 {
 		return fmt.Errorf("empty scenarios array - report at least one named scenario; if nothing could be driven, return it as untested with a reason")
 	}
-	var issues []string
 	for i, scenario := range *payload.Scenarios {
 		issues = append(issues, scenarioContractIssues(i, scenario)...)
 	}
@@ -168,6 +179,8 @@ func scenarioContractIssues(i int, scenario testScenarioContractFields) []string
 	var issues []string
 	if scenario.Name == nil || strings.TrimSpace(*scenario.Name) == "" {
 		issues = append(issues, fmt.Sprintf("scenario %d: missing name - every scenario needs a non-empty name describing what an end user does", n))
+	} else if reportTextLetters(*scenario.Name) < minReportTextLetters {
+		issues = append(issues, fmt.Sprintf("scenario %d: name %s is a placeholder - name what an end user does and the observable result, as a full phrase", n, quotedPlaceholder(*scenario.Name)))
 	}
 	knownResult := scenario.Result != nil && types.IsKnownScenarioResult(*scenario.Result)
 	if scenario.Result == nil {
@@ -188,8 +201,12 @@ func scenarioContractIssues(i int, scenario testScenarioContractFields) []string
 		return issues
 	}
 	result := *scenario.Result
-	if result != types.ScenarioResultUntested && scenario.Evidence != nil && strings.TrimSpace(*scenario.Evidence) == "" {
-		issues = append(issues, fmt.Sprintf("scenario %d: result %q missing evidence - say what was observed that shows this live result", n, result))
+	if result != types.ScenarioResultUntested && scenario.Evidence != nil {
+		if strings.TrimSpace(*scenario.Evidence) == "" {
+			issues = append(issues, fmt.Sprintf("scenario %d: result %q missing evidence - say what was observed that shows this live result", n, result))
+		} else if reportTextLetters(*scenario.Evidence) < minReportTextLetters {
+			issues = append(issues, fmt.Sprintf("scenario %d: evidence %s is a placeholder - say what was observed that shows this result", n, quotedPlaceholder(*scenario.Evidence)))
+		}
 	}
 	if scenario.Live != nil && result == types.ScenarioResultUntested && *scenario.Live {
 		issues = append(issues, fmt.Sprintf("scenario %d: result %q but live=true - untested scenarios must set live=false; live=true is only for scenarios you drove against the real product", n, result))
@@ -197,10 +214,51 @@ func scenarioContractIssues(i int, scenario testScenarioContractFields) []string
 	if scenario.Live != nil && result != types.ScenarioResultUntested && !*scenario.Live {
 		issues = append(issues, fmt.Sprintf("scenario %d: result %q but live=false - if you did not drive this against the live product, mark it result %q with a reason instead of %q", n, result, types.ScenarioResultUntested, result))
 	}
-	if result == types.ScenarioResultUntested && scenario.Reason != nil && strings.TrimSpace(*scenario.Reason) == "" {
-		issues = append(issues, fmt.Sprintf("scenario %d: result %q without a reason - state what was tried to drive it live and why live validation is impossible, naming the specific tool, credential, permission, or authority out of reach and how to provide it", n, result))
+	if result == types.ScenarioResultUntested && scenario.Reason != nil {
+		if strings.TrimSpace(*scenario.Reason) == "" {
+			issues = append(issues, fmt.Sprintf("scenario %d: result %q without a reason - state what was tried to drive it live and why live validation is impossible, naming the specific tool, credential, permission, or authority out of reach and how to provide it", n, result))
+		} else if reportTextLetters(*scenario.Reason) < minReportTextLetters {
+			issues = append(issues, fmt.Sprintf("scenario %d: reason %s is a placeholder - state what was tried to drive it live and why that cannot work", n, quotedPlaceholder(*scenario.Reason)))
+		}
 	}
 	return issues
+}
+
+// The placeholder floor. A Test report's scenario name, a pass or fail
+// scenario's evidence, an untested scenario's reason and the testing summary
+// each need at least minReportTextLetters letters or digits, and the tested
+// array at least one entry of minTestedEntryLetters. A length floor needs no
+// list of stub words and reads the same in every language: 8 is under any
+// honest phrase and over every recorded stub ("x", "e", "t", "Test", which
+// run 01M6MYHR17WEVPM11RFY2J3CTC recorded as go). It lives here and not in
+// the JSON schema because the adapters do not accept the same schema keywords,
+// so this validator is the one authority for every adapter and verdict.
+const (
+	minReportTextLetters  = 8
+	minTestedEntryLetters = 3
+)
+
+// placeholderQuoteLimit bounds the value a placeholder refusal quotes.
+const placeholderQuoteLimit = 40
+
+// reportTextLetters counts the Unicode letters and digits in s, so a sentence
+// written without spaces counts in full and punctuation counts for nothing.
+func reportTextLetters(s string) int {
+	n := 0
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			n++
+		}
+	}
+	return n
+}
+
+func quotedPlaceholder(s string) string {
+	s = strings.TrimSpace(s)
+	if runes := []rune(s); len(runes) > placeholderQuoteLimit {
+		s = string(runes[:placeholderQuoteLimit])
+	}
+	return strconv.Quote(s)
 }
 
 // findingsSchema is the JSON schema for structured findings output.
@@ -255,13 +313,16 @@ var testFindingsSchema = json.RawMessage(`{
 		"summary": {"type": "string"},
 		"tested": {
 			"type": "array",
-			"items": {"type": "string"}
+			"items": {"type": "string"},
+			"description": "the exact commands, tests and checks that were run; at least one real entry, never a placeholder"
 		},
 		"testing_summary": {
-			"type": "string"
+			"type": "string",
+			"description": "one or more sentences on what was exercised and the overall result, never a placeholder"
 		},
 		"artifacts": {
 			"type": "array",
+			"description": "optional: reviewer-visible evidence artifacts; empty or absent when there are none",
 			"items": {
 				"type": "object",
 				"properties": {

@@ -620,7 +620,7 @@ func TestTestPromptsCarryRecordedHumanDecisions(t *testing.T) {
 		if call == 1 {
 			return &agent.Result{Output: json.RawMessage(`{"summary":"fixed tests"}`)}, nil
 		}
-		return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"ok","scenarios":[{"name":"s","result":"pass","live":true,"evidence":"e","reason":"drove it"}],"verdict":"go","tested":["x"],"artifacts":[],"testing_summary":"ok"}`)}, nil
+		return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"ok","scenarios":[{"name":"a user runs the command","result":"pass","live":true,"evidence":"the command printed its result","reason":"drove it"}],"verdict":"go","tested":["go run ."],"artifacts":[],"testing_summary":"drove the command; it passed"}`)}, nil
 	}}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	recordHumanReviewDecision(t, sctx)

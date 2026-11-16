@@ -369,3 +369,193 @@ func TestRefusedTestReportKeepsItsEvidenceJourney(t *testing.T) {
 		t.Fatalf("Test findings carry no rebuilt-report note: %+v", findings.Items)
 	}
 }
+
+// placeholderReportScenarioName is the one scenario the refused Test reports
+// carry inside their summary string. The fake agent answers a correction
+// prompt that holds it with the report rebuilt from them.
+const placeholderReportScenarioName = "an importer types a word of a long question and finds its column"
+
+// refusedThenStubbedScenario scripts the last Test evidence turn of run
+// 01M6MYHR17WEVPM11RFY2J3CTC (T223): the agent submits its real report twice,
+// and each time the tool call has swallowed the scenarios array into the
+// summary string, so the CLI refuses it for the missing scenarios. The agent
+// then sends the stub it recorded (scenario "x", evidence "e", tested "t",
+// testing summary "t", verdict go), which the CLI accepts. Before the
+// placeholder floor the gate's validator accepted it too, so the run recorded
+// go with 1 of 1 scenarios live.
+func refusedThenStubbedScenario(t *testing.T) string {
+	t.Helper()
+	scenarios, err := json.Marshal([]any{map[string]any{
+		"name":     placeholderReportScenarioName,
+		"result":   "pass",
+		"live":     true,
+		"evidence": "typing a word of the question's label narrowed the list to it and named the column that holds it",
+		"reason":   "",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusedReport := map[string]any{
+		"findings":        []any{},
+		"summary":         "Every scenario driven live passed.</summary>\n<parameter name=\"scenarios\">" + string(scenarios),
+		"verdict":         "go",
+		"testing_summary": "Drove the import column search live against an isolated stack; it passed.",
+		"artifacts":       []any{},
+		"tested":          []string{"npx playwright test e2e/choices-at-scale.spec.ts"},
+	}
+	stub := map[string]any{
+		"findings":        []any{},
+		"summary":         "Test",
+		"scenarios":       []any{map[string]any{"name": "x", "result": "pass", "live": true, "evidence": "e", "reason": ""}},
+		"verdict":         "go",
+		"tested":          []string{"t"},
+		"testing_summary": "t",
+		"artifacts":       []any{},
+	}
+	const session = "a3f0c0de-0000-4000-8000-000000000233"
+	usage := map[string]int{"input_tokens": 10, "output_tokens": 5}
+	call := func(id string, input map[string]any) string {
+		return claudeStreamLine(t, map[string]any{"type": "assistant", "session_id": session, "message": map[string]any{
+			"model": "claude-opus-4-7", "usage": usage,
+			"content": []any{map[string]any{"type": "tool_use", "id": id, "name": "StructuredOutput", "input": input}},
+		}})
+	}
+	outcome := func(id, content string, isError bool) string {
+		block := map[string]any{"type": "tool_result", "tool_use_id": id, "content": content}
+		if isError {
+			block["is_error"] = true
+		}
+		return claudeStreamLine(t, map[string]any{"type": "user", "session_id": session, "message": map[string]any{
+			"role": "user", "content": []any{block},
+		}})
+	}
+	stream := []string{
+		claudeStreamLine(t, map[string]any{"type": "system", "subtype": "init", "session_id": session}),
+		claudeStreamLine(t, map[string]any{"type": "assistant", "session_id": session, "message": map[string]any{
+			"model": "claude-opus-4-7", "usage": usage,
+			"content": []any{map[string]any{"type": "tool_use", "id": "toolu_drive", "name": "Bash", "input": map[string]any{
+				"command": "npx playwright test e2e/choices-at-scale.spec.ts",
+			}}},
+		}}),
+		outcome("toolu_drive", "15 passed", false),
+	}
+	for i := 1; i <= 2; i++ {
+		id := "toolu_report" + string(rune('0'+i))
+		stream = append(stream,
+			call(id, refusedReport),
+			outcome(id, "Output does not match required schema: root: must have required property 'scenarios'", true),
+		)
+	}
+	stream = append(stream,
+		call("toolu_stub", stub),
+		outcome("toolu_stub", "Structured output provided successfully", false),
+		claudeStreamLine(t, map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": session, "structured_output": stub, "usage": usage}),
+	)
+
+	var b strings.Builder
+	b.WriteString("actions:\n  - match: \"" + testEvidencePromptMarker + "\"\n    claude_stream:\n")
+	for _, line := range stream {
+		quoted, err := json.Marshal(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.WriteString("      - " + string(quoted) + "\n")
+	}
+	b.WriteString(`  - match: "` + placeholderReportScenarioName + `"
+    text: "rebuilt the report from the refused submission"
+    structured:
+      findings: []
+      summary: "every scenario driven live passed"
+      tested: ["npx playwright test e2e/choices-at-scale.spec.ts"]
+      testing_summary: "Drove the import column search live against an isolated stack; it passed."
+      artifacts: []
+      scenarios:
+        - name: "` + placeholderReportScenarioName + `"
+          result: pass
+          live: true
+          evidence: "typing a word of the question's label narrowed the list to it and named the column that holds it"
+          reason: ""
+      verdict: go
+  - text: "no issues found"
+    structured:
+      findings: []
+      summary: "no issues found"
+      risk_level: low
+      risk_rationale: "no risks detected in the diff"
+      risk_scope: source-or-external
+`)
+	path := filepath.Join(t.TempDir(), "refused-then-stubbed-scenario.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write scenario: %v", err)
+	}
+	return path
+}
+
+// TestPlaceholderTestReportIsRefusedJourney reproduces the last Test evidence
+// turn of run 01M6MYHR17WEVPM11RFY2J3CTC (T223) through the stock
+// `no-mistakes axi` surface. The CLI refused the agent's real report twice
+// and then accepted a stub of one-letter placeholders, which the gate's
+// validator accepted too, so the PR body and the attestation said 1 of 1
+// scenarios live with the testing summary "t". The validator now refuses the
+// stub by name, the correction turn rebuilds the report from the refused
+// ones, and the recorded verdict is the correction's.
+func TestPlaceholderTestReportIsRefusedJourney(t *testing.T) {
+	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: refusedThenStubbedScenario(t)})
+	if out, err := h.Run("init"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	branch := "feature/placeholder-test-report"
+	h.CommitChange(branch, ".no-mistakes.yaml", "commands:\n  lint: 'exit 0'\n", "configure lint")
+	h.CommitChange(branch, "feature.txt", "value\n", "add feature")
+
+	runOut, runErr := h.Run("axi", "run", "--intent", "validate the feature whose test agent submitted a stub", "--skip", "pr,ci")
+	t.Logf("stock axi run surface:\n%s", runOut)
+	run := h.WaitForRun(branch, 90*time.Second)
+
+	step, ok := findStep(run.Steps, types.StepTest)
+	if !ok || step.FindingsJSON == nil {
+		t.Fatalf("test step = %+v, want recorded findings", step)
+	}
+	findings, err := types.ParseFindingsJSON(*step.FindingsJSON)
+	if err != nil {
+		t.Fatalf("parse Test findings: %v", err)
+	}
+	if findings.TestingSummary == "t" || len(findings.Scenarios) != 1 || findings.Scenarios[0].Name != placeholderReportScenarioName {
+		t.Fatalf("recorded Test report = verdict %q testing summary %q scenarios %+v, want the correction's rebuild of the refused report, not the placeholder stub",
+			findings.Verdict, findings.TestingSummary, findings.Scenarios)
+	}
+
+	logOut, err := h.Run("axi", "logs", "--step", "test", "--full")
+	if err != nil {
+		t.Fatalf("axi logs: %v\n%s", err, logOut)
+	}
+	for _, want := range []string{
+		`scenario 1: name "x" is a placeholder - name what an end user does and the observable result, as a full phrase`,
+		`scenario 1: evidence "e" is a placeholder - say what was observed that shows this result`,
+		`testing summary "t" is a placeholder - describe what was exercised and the overall result in a sentence`,
+		`tested array holds only placeholders - record the commands, tests or checks that were run`,
+	} {
+		// axi prints a log line holding quotes as a quoted TOON string.
+		if !strings.Contains(logOut, want) && !strings.Contains(logOut, strings.ReplaceAll(want, `"`, `\"`)) {
+			t.Fatalf("Test step log does not refuse the stub with %q:\n%s", want, logOut)
+		}
+	}
+
+	var corrections []string
+	for _, inv := range h.AgentInvocations() {
+		if strings.Contains(inv.Prompt, testCorrectionPromptMarker) {
+			corrections = append(corrections, inv.Prompt)
+		}
+	}
+	if len(corrections) != 1 || !strings.Contains(corrections[0], placeholderReportScenarioName) {
+		t.Fatalf("Test correction prompts = %d, want one that holds the refused reports' scenario %q:\n%s",
+			len(corrections), placeholderReportScenarioName, strings.Join(corrections, "\n---\n"))
+	}
+	if runErr != nil || run.Status != types.RunCompleted || step.Status != types.StepStatusCompleted {
+		t.Fatalf("run status = %s, test step %s (axi run error %v, run error %q), want completed with the correction's go\n%s",
+			run.Status, step.Status, runErr, deref(run.Error), runOut)
+	}
+	if findings.Verdict != types.TestVerdictGo || !findings.Scenarios[0].Live {
+		t.Fatalf("recorded Test verdict = %q scenarios %+v, want the correction's go with its live scenario", findings.Verdict, findings.Scenarios)
+	}
+}
