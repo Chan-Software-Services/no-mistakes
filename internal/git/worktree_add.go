@@ -60,7 +60,10 @@ const maxWorktreeEntrySuffix = 999
 //
 // A wtPath that exists and is not an empty directory is refused untouched. A
 // creation that fails part way, a cancelled context included, undoes what it
-// did and returns the original error.
+// did and returns the original error. What a creation the process did not live
+// to finish left is taken by a later WorktreeRemove on the same repository: of
+// its working directory, which also takes the unlisted entry, or by that
+// removal's sweep once it is older than creatingWorktreeGrace.
 //
 // On a repository in another ref format (extensions.refstorage), whose HEAD
 // cannot be written as a file, it runs `git worktree add --detach`, and the
