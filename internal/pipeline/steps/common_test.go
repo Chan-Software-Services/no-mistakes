@@ -18,6 +18,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/forgecontext"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps/internal/stepstest"
 	"github.com/kunchenguid/no-mistakes/internal/runenv"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -25,16 +26,16 @@ import (
 
 func TestCopyDirContents_PreservesGitRepo(t *testing.T) {
 	t.Parallel()
-	ensureGitRepoTemplate(t)
+	template, _, wantHead := stepstest.GitRepoTemplate(t)
 
 	dir := t.TempDir()
-	if err := copyDirContents(gitRepoTemplate.dir, dir); err != nil {
+	if err := copyDirContents(template, dir); err != nil {
 		t.Fatal(err)
 	}
 
 	headSHA := gitCmd(t, dir, "rev-parse", "HEAD")
-	if headSHA != gitRepoTemplate.headSHA {
-		t.Fatalf("HEAD = %q, want %q", headSHA, gitRepoTemplate.headSHA)
+	if headSHA != wantHead {
+		t.Fatalf("HEAD = %q, want %q", headSHA, wantHead)
 	}
 
 	status := gitCmd(t, dir, "status", "--short")

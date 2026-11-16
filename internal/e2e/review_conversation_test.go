@@ -924,7 +924,8 @@ func TestReviewConversationSupersededRoundsReachTheNextReviewer(t *testing.T) {
 // waitForAgentPrompt polls the agent's recorded invocations until one carries
 // marker in its prompt, and returns that prompt. On timeout it dumps the debug
 // state and fails with where the newest run on branch stood, so a slow or
-// failed run can be told from a prompt that lost the marker.
+// failed run can be told from a prompt that lost the marker; with the daemon
+// unreachable the message carries the lookup's error rather than failing on it.
 func waitForAgentPrompt(t *testing.T, h *Harness, branch, marker string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -942,14 +943,14 @@ func waitForAgentPrompt(t *testing.T, h *Harness, branch, marker string, timeout
 	}
 	h.dumpDebugState()
 	var newest *ipc.RunInfo
-	runs := h.Runs()
+	runs, err := h.runs()
 	for i := range runs {
 		if runs[i].Branch == branch {
 			newest = &runs[i]
 			break
 		}
 	}
-	t.Fatalf("no agent prompt for branch %s carried %q in %v (%s)", branch, marker, timeout, runProgress(newest))
+	t.Fatalf("no agent prompt for branch %s carried %q in %v (%s)", branch, marker, timeout, polledRunProgress(newest, err))
 	return ""
 }
 

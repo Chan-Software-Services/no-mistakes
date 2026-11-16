@@ -119,3 +119,39 @@ func writeEvidence(prompt string, files []EvidenceFile) error {
 	}
 	return nil
 }
+
+// evidenceDirPlaceholder in a scenario's structured output stands for the
+// run's evidence directory, so a test artifact can name a file written by
+// write_evidence the way a real agent does: by its full path.
+const evidenceDirPlaceholder = "{{evidence_dir}}"
+
+// withEvidenceDir replaces evidenceDirPlaceholder in every string of the
+// action's structured output with the directory the prompt names.
+func (a Action) withEvidenceDir(prompt string) Action {
+	dir := evidenceDirFromPrompt(prompt)
+	if dir == "" || a.Structured == nil {
+		return a
+	}
+	a.Structured, _ = replaceInStrings(a.Structured, evidenceDirPlaceholder, dir).(map[string]any)
+	return a
+}
+
+func replaceInStrings(value any, old, new string) any {
+	switch v := value.(type) {
+	case string:
+		return strings.ReplaceAll(v, old, new)
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			out[key] = replaceInStrings(item, old, new)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = replaceInStrings(item, old, new)
+		}
+		return out
+	}
+	return value
+}

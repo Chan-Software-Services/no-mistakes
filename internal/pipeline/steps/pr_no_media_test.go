@@ -279,7 +279,7 @@ func TestPRStep_StoreInRepoPublishesTheLogAndNotTheScreenshot(t *testing.T) {
 		return &agent.Result{Output: json.RawMessage(`{"title":"feat: demo change","body":"## What Changed\n\n- demo"}`)}, nil
 	}}
 	png := writeNoMediaEvidence(t, testEvidenceDir(sctx), "checkout.png", "\x89PNG binary")
-	logPath := writeNoMediaEvidence(t, testEvidenceDir(sctx), "server.bin", "\x00\x01 binary log")
+	logPath := writeNoMediaEvidence(t, testEvidenceDir(sctx), "server.log", "POST /checkout 200\n")
 	insertCompletedStep(t, sctx, types.StepTest, findingsJSON(t, types.Findings{
 		TestingSummary: "Evidence was collected.",
 		Artifacts: []types.TestArtifact{
@@ -294,11 +294,11 @@ func TestPRStep_StoreInRepoPublishesTheLogAndNotTheScreenshot(t *testing.T) {
 	}
 	tip := gitCmd(t, remote, "rev-parse", "refs/heads/no-mistakes/evidence")
 	tree := gitCmd(t, remote, "ls-tree", "-r", "--name-only", tip)
-	if strings.Contains(tree, "checkout.png") || !strings.Contains(tree, ".no-mistakes/evidence/feature/add-login/server.bin") {
+	if strings.Contains(tree, "checkout.png") || !strings.Contains(tree, ".no-mistakes/evidence/feature/add-login/server.log") {
 		t.Fatalf("evidence branch must carry the log and not the screenshot:\n%s", tree)
 	}
 	assertNoMediaInPRBody(t, content.Body)
-	wantLink := "- Evidence: [Server log](https://github.com/example/widgets/blob/" + tip + "/.no-mistakes/evidence/feature/add-login/server.bin)"
+	wantLink := "Source: [Server log](https://github.com/example/widgets/blob/" + tip + "/.no-mistakes/evidence/feature/add-login/server.log)"
 	if !strings.Contains(content.Body, wantLink) {
 		t.Fatalf("expected the commit-pinned log link %q:\n%s", wantLink, content.Body)
 	}
@@ -422,4 +422,111 @@ func TestComposeOwnedPRContent_NeverRewritesAuthorText(t *testing.T) {
 		t.Fatalf("author text was rewritten:\nbefore %q\nafter  %q", parts.before, parts.after)
 	}
 	assertNoMediaInPRBody(t, parts.appendix)
+}
+
+// TestNeutralizePRMedia_BreaksLessCommonLinkForms covers the link forms a forge
+// still resolves to an image, a video or an attachment although they do not
+// look like a plain media URL: a scheme-less www autolink, a reference-style
+// definition, a target or attribute value holding a space, an extension written
+// with entities or percent-encoding, and GitHub's extension-less asset URLs.
+// Ordinary links in the same forms are kept as written.
+func TestNeutralizePRMedia_BreaksLessCommonLinkForms(t *testing.T) {
+	t.Parallel()
+	const assetID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+	for _, tc := range []struct{ in, want string }{
+		{`see www.example.com/shots/a.png now`, `see (image link removed) now`},
+		{"[shot]: ./evidence/shot.png\n\nSee [the page][shot].", "\\[shot]: (image link removed)\n\nSee [the page][shot]."},
+		{"See [the page][shot].\n\n[shot]:\n  https://example.com/a.png", "See [the page][shot].\n\n\\[shot]:\n  (image link removed)"},
+		{`  [clip]: <media/my clip.mp4> "title"`, `  \[clip]: <(video link removed)> "title"`},
+		{`> [shot]: shot.png`, `> \[shot]: (image link removed)`},
+		{`[shot](<my shot.png>)`, `[shot]\(<my shot.png>)`},
+		{`<a href="my shot.png">x</a>`, `<\a href="(image link removed)">x</a>`},
+		{`<img src='my shot.png'>`, `<\img src='(image link removed)'>`},
+		{`<source srcset="a.webp 1x, b.webp 2x">`, `<\source srcset="(image link removed)">`},
+		{`https://example.com/a&#46;png`, `(image link removed)`},
+		{`https://example.com/a.pn&#x67;`, `(image link removed);`},
+		{`[shot](shots/a&period;png)`, `[shot]\(shots/a&period;png)`},
+		{`https://example.com/a%2Epng`, `(image link removed)`},
+		{`https://github.com/owner/repo/assets/12345/` + assetID, `(attachment link removed)`},
+		{`[shot](https://github.com/owner/repo/assets/12345/` + assetID + `)`, `[shot]\((attachment link removed))`},
+		{`https://github.com/user&#45;attachments/assets/` + assetID, `(attachment link removed)`},
+		{`https://user-images.githubusercontent.com/12345/67890-` + assetID, `(attachment link removed)`},
+		{`<img src="data:image/png;base64,iVBORw0KGgoAAAA=">`, `<\img src="(image link removed)">`},
+		{`see data:image/png;base64,iVBORw0KGgoAAAA= now`, `see (image link removed) now`},
+		{`[clip](data:video/mp4;base64,AAAAIGZ0eXA=)`, `[clip]\((video link removed))`},
+		{`_www.example.com/shots/a.png_`, `_(image link removed)_`},
+		{`_https://example.com/a.png_`, `_(image link removed)_`},
+		{`[shot](shots/a(1).png)`, `[shot]\(shots/a(1).png)`},
+		{`step1https://example.com/a.png`, `(image link removed)`},
+		{`see 1https://example.com/a.png`, `see 1(image link removed)`},
+		{`1https://example.com/a.png`, `1(image link removed)`},
+		{`_data:image/png;base64,iVBORw0KGgoAAAA=_`, `_(image link removed)_`},
+		// Ordinary links in the same forms.
+		{`see www.example.com/docs now`, `see www.example.com/docs now`},
+		{"[docs]: ./docs/guide.md\n\nSee [the guide][docs].", "[docs]: ./docs/guide.md\n\nSee [the guide][docs]."},
+		{`[log](<logs/my run.txt>)`, `[log](<logs/my run.txt>)`},
+		{`<a href="my notes.txt">x</a>`, `<a href="my notes.txt">x</a>`},
+		{`https://example.com/a&#46;txt`, `https://example.com/a&#46;txt`},
+		{`https://github.com/owner/repo/assets/readme`, `https://github.com/owner/repo/assets/readme`},
+		{`data:text/plain;base64,aGVsbG8=`, `data:text/plain;base64,aGVsbG8=`},
+		{`_www.example.com/docs_`, `_www.example.com/docs_`},
+		{`[notes](docs/a(1).txt)`, `[notes](docs/a(1).txt)`},
+		{`step1https://example.com/docs`, `step1https://example.com/docs`},
+		{`see 1https://example.com/docs`, `see 1https://example.com/docs`},
+		{`_data:text/plain;base64,aGVsbG8=_`, `_data:text/plain;base64,aGVsbG8=_`},
+		{`awww.example.com/shots/a.png`, `awww.example.com/shots/a.png`},
+	} {
+		got := neutralizePRMedia(tc.in)
+		if got != tc.want {
+			t.Errorf("neutralizePRMedia(%q)\n got %q\nwant %q", tc.in, got, tc.want)
+		}
+		if again := neutralizePRMedia(got); again != got {
+			t.Errorf("neutralizePRMedia is not idempotent on %q: %q", got, again)
+		}
+	}
+}
+
+// TestPushStep_AttestationRewriteCarriesNoMedia covers a PR whose generated
+// body predates the media rule: when the Push step rewrites that body to attest
+// the new head, the revision it writes carries no embed and no media link, and
+// still verifies.
+func TestPushStep_AttestationRewriteCarriesNoMedia(t *testing.T) {
+	updated, _, newHead := pushOntoExistingPR(t, func(priorHead string) string {
+		return "## Testing\n\n" + noMediaInjection + "\n\n" + compliantPipelineBody(t, priorHead)
+	})
+	assertNoMediaInPRBody(t, updated)
+	if !strings.Contains(updated, "## Testing") || !strings.Contains(updated, "(image link removed)") {
+		t.Fatalf("the rewritten body must keep its text with the media neutralized:\n%s", updated)
+	}
+	if got, out := runVerifyPy(t, updated, newHead); got != "success" {
+		t.Fatalf("the rewritten body must still verify at the pushed head, got %s\n%s", got, out)
+	}
+}
+
+// TestRebindOwnedPRAttestation_NeutralizesOnlyTheGeneratedAppendix is the same
+// rewrite on a body with author-owned text: the generated appendix is
+// neutralized under a fresh integrity guard, and the author's text around it is
+// written back exactly as it was read.
+func TestRebindOwnedPRAttestation_NeutralizesOnlyTheGeneratedAppendix(t *testing.T) {
+	t.Parallel()
+	_, appendix := ownedFixture(t)
+	author := "# Overview\n\nThe author's own ![diagram](docs/flow.png).\n\n"
+	after := "\nAuthor footer <img src=\"logo.png\">"
+	body := author + wrapPRAppendix(appendix+"\n\nGenerated "+noMediaInjection) + after
+
+	updated, rebound, err := rebindOwnedPRAttestation(body, "0123456789abcdef0123456789abcdef01234567", nil, pipelineAttestationPolicy{})
+	if err != nil || !rebound {
+		t.Fatalf("rebind failed: rebound=%v err=%v", rebound, err)
+	}
+	parts, err := parsePROwnedBody(updated)
+	if err != nil {
+		t.Fatalf("rewritten body must keep its integrity guard: %v", err)
+	}
+	if parts.before != author || parts.after != after {
+		t.Fatalf("author text was rewritten:\nbefore %q\nafter  %q", parts.before, parts.after)
+	}
+	assertNoMediaInPRBody(t, parts.appendix)
+	if !strings.Contains(parts.appendix, "Generated see") {
+		t.Fatalf("the appendix lost its text:\n%s", parts.appendix)
+	}
 }

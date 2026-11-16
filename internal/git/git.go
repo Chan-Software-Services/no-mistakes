@@ -759,18 +759,6 @@ func isWorktreeConfigWriteUnavailable(err error) bool {
 	return strings.Contains(err.Error(), "worktreeConfig")
 }
 
-// WorktreeAdd creates a detached worktree at wtPath checked out to the given SHA.
-func WorktreeAdd(ctx context.Context, repoDir, wtPath, sha string) error {
-	_, err := Run(ctx, repoDir, "worktree", "add", "--detach", wtPath, sha)
-	return err
-}
-
-// WorktreeRemove removes a worktree at the given path.
-func WorktreeRemove(ctx context.Context, repoDir, wtPath string) error {
-	_, err := Run(ctx, repoDir, "worktree", "remove", "--force", wtPath)
-	return err
-}
-
 // ResolveRef returns the commit SHA that ref resolves to via
 // `git rev-parse --verify <ref>^{commit}`. Use it to pin an exact commit
 // (e.g. the default-branch tip just fetched) before reading a file from it,

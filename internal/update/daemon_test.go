@@ -134,20 +134,7 @@ func TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces(t *testing.
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(copyPath, "-test.run=^TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces$")
-	cmd.Env = append(os.Environ(), "NO_MISTAKES_TEST_CHILD=1")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-	})
-	waitForChildReady(t, stdout)
+	cmd := startTestChild(t, copyPath)
 
 	p := paths.WithRoot(t.TempDir())
 	if err := os.WriteFile(p.PIDFile(), []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0o644); err != nil {
@@ -337,6 +324,76 @@ func TestDefaultResetDaemonDoesNotReportOfflineWhenRestartLeavesDaemonRunning(t 
 
 // childReadyLine is what the copied test binary prints once it is running.
 const childReadyLine = "no-mistakes-test-child-ready"
+
+// startTestChild runs binary, a copy of this test binary, as the sleeping
+// child of TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces,
+// with env added to this process's environment, and returns once the child
+// reports ready. The test's cleanup kills the child.
+func startTestChild(t *testing.T, binary string, env ...string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(binary, "-test.run=^TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces$")
+	cmd.Env = append(append(os.Environ(), "NO_MISTAKES_TEST_CHILD=1"), env...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	waitForChildReady(t, stdout)
+	return cmd
+}
+
+// A test that re-executes this test binary starts a child whose TestMain
+// never reaches the cleanup at its end: the parent kills the sleeping child of
+// TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces, and the
+// child of TestSpawnBackgroundLeavesNoUnreapedChild exits in flag parsing on
+// the background update flag. Whatever such a TestMain made in the temp dir
+// therefore stayed there after every passing run.
+func TestAReExecutedTestBinaryLeavesNothingInTheTempDir(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T, env []string)
+	}{
+		{"killed test child", func(t *testing.T, env []string) {
+			cmd := startTestChild(t, binary, env...)
+			if err := cmd.Process.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = cmd.Process.Wait()
+		}},
+		{"background update check", func(t *testing.T, env []string) {
+			cmd := exec.Command(binary, backgroundFlag, "v9.9.9")
+			cmd.Env = append(os.Environ(), env...)
+			out, err := cmd.CombinedOutput()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("background update check child: err = %v, want the test binary to reject the flag: %s", err, out)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			tc.run(t, []string{"TMPDIR=" + tmp, "TMP=" + tmp, "TEMP=" + tmp})
+
+			entries, err := os.ReadDir(tmp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				t.Errorf("re-executed test binary left %s in its temp dir", entry.Name())
+			}
+		})
+	}
+}
 
 // waitForChildReady blocks until the child prints childReadyLine.
 func waitForChildReady(t *testing.T, stdout io.Reader) {

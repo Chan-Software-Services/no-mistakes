@@ -904,7 +904,7 @@ func removableOrphanWorktree(d *db.DB, wt orphanWorktree) bool {
 func removeOrphanWorktree(ctx context.Context, wt orphanWorktree) {
 	gateDir, wtPath := wt.gateDir, wt.dir
 	if err := git.WorktreeRemove(ctx, gateDir, wtPath); err != nil {
-		slog.Warn("git worktree remove failed, falling back to os.RemoveAll", "path", wtPath, "error", err)
+		slog.Warn("worktree removal failed, falling back to os.RemoveAll", "path", wtPath, "error", err)
 		if err := os.RemoveAll(wtPath); err != nil {
 			slog.Warn("failed to remove orphaned worktree", "path", wtPath, "error", err)
 		}
