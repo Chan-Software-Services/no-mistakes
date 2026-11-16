@@ -108,7 +108,7 @@ func TestPRStep_BuildPRContentRedactsAbsoluteHomePaths(t *testing.T) {
 
 	cases := []homePathLeakCase{
 		{
-			name:        "artifact path rendered as a local file reference",
+			name:        "artifact file named without its path",
 			evidenceDir: fixtureEvidenceDir,
 			testFindings: findingsJSON(t, types.Findings{
 				TestingSummary: "Captured the failing request/response pair.",
@@ -118,7 +118,7 @@ func TestPRStep_BuildPRContentRedactsAbsoluteHomePaths(t *testing.T) {
 					Path:  filepath.Join(fixtureEvidenceDir, "pytest.log"),
 				}},
 			}),
-			wantVisible: []string{"pytest output", fixtureRedactedPath(".no-mistakes", "evidence", "run-1", "pytest.log")},
+			wantVisible: []string{"- Evidence: pytest output (kept with the run, not published)"},
 		},
 		{
 			name:        "pytest rootdir header in captured output",
@@ -555,7 +555,7 @@ func TestTestFindingsSchema_KeepsEvidenceDirectoryPathsReportable(t *testing.T) 
 		t.Fatalf("artifact path schema must not rule on home directories, that is the redaction boundary's job: %q", description)
 	}
 
-	t.Run("evidence directory path is rendered, not dropped", func(t *testing.T) {
+	t.Run("evidence directory artifact is rendered, not dropped", func(t *testing.T) {
 		t.Parallel()
 		tc := homePathLeakCase{
 			evidenceDir: fixtureEvidenceDir,
@@ -567,10 +567,7 @@ func TestTestFindingsSchema_KeepsEvidenceDirectoryPathsReportable(t *testing.T) 
 					Path:  filepath.Join(fixtureEvidenceDir, "session.log"),
 				}},
 			}),
-			wantVisible: []string{
-				"captured session",
-				fixtureRedactedPath(".no-mistakes", "evidence", "run-1", "session.log"),
-			},
+			wantVisible: []string{"- Evidence: captured session (kept with the run, not published)"},
 		}
 		content := buildHomePathLeakPRContent(t, tc)
 		assertNoHomePathLeak(t, tc, content)

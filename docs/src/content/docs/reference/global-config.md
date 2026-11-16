@@ -1016,10 +1016,14 @@ Image and video evidence never leaves the machine: nothing is uploaded, and the 
 The test step always collects evidence outside the worktree, so artifacts never enter the branch under validation.
 Image and video artifacts (by kind, such as `screenshot` or `video`, or by an image or video file extension in their path or URL) stay on local disk with the run.
 The PR body renders each one as its caption only, as plain text such as "Screenshot: the checkout page shows the order total", with no URL, path, file name, or link; one without a caption is left out.
-Other artifacts (logs, command output) are inlined or linked as before.
+Other artifacts are named by their label, never by a local path or a file name: a label that names a file or a path is replaced by a neutral one such as `Log`, `Command output` or `Artifact`.
+A text evidence file is inlined or linked; any other file is listed as kept with the run.
 `test.evidence.attach_media`, which used to upload images and videos to GitHub user-attachments, is retired: it still parses in global and repo config, logs a deprecation warning, and changes nothing.
-When `store_in_repo` is true for a GitHub repository, the PR step copies that directory, minus its image and video files, the Test step's `scratch/` directory, and the review conversation, onto `branch` under `<dir>/<branch-slug>` in the code branch's push-target repository (the fork when fork routing is configured), pushes it, and links the artifacts from the pull request body.
-Image and video files are skipped and do not count against the publication limits, so the evidence branch never carries a screenshot or a recording.
+When `store_in_repo` is true for a GitHub repository, the PR step copies that directory's text evidence files, leaving out the Test step's `scratch/` directory and the review conversation, onto `branch` under `<dir>/<branch-slug>` in the code branch's push-target repository (the fork when fork routing is configured), pushes it, and links the artifacts from the pull request body.
+A text evidence file has one of these extensions: `.txt`, `.log`, `.out`, `.err`, `.md`, `.markdown`, `.json`, `.jsonl`, `.ndjson`, `.yaml`, `.yml`, `.toml`, `.csv`, `.tsv`, `.xml`, `.diff`, `.patch`, `.tap`.
+It must also read as UTF-8 text and carry no image or video inside it (for example as a data URI), and a Markdown file must hold no image embed.
+Every other file, such as a screenshot, a recording, an archive, a browser trace or an HTML report, stays on local disk with the run and does not count against the publication limits.
+The PR body embeds evidence text by the same rule, and links a repository file only when it is in the pushed tree.
 The branch is an orphan: it shares no history with your code branches, so evidence never reaches the default branch. Links use the evidence commit rather than the branch, so they keep resolving after later runs.
 Branch slashes become nested directories, unsafe branch characters are replaced, and an empty branch slug falls back to the run ID.
 `branch` must be a valid Git branch name; an invalid value fails the config with the offending key and value.

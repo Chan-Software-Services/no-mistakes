@@ -30,9 +30,9 @@ type evidenceLinks struct {
 // orphan evidence branch and returns the links the PR body should use. It
 // returns nil whenever evidence is not opted in, there is nothing to publish,
 // or publication failed. The renderer then omits evidence-branch links that
-// would not resolve, and the artifact keeps its local-path rendering. Image and
-// video files are never published (internal/evidence skips them), so no image
-// or video is ever linked.
+// would not resolve, and the artifact is named by its label as kept with the
+// run. Only text evidence is published (evidence.IsPublishableText), so no
+// image or video is ever linked.
 func publishRunEvidence(sctx *pipeline.StepContext) *evidenceLinks {
 	if sctx == nil || sctx.Config == nil || sctx.Repo == nil || sctx.Run == nil || !sctx.Config.Test.Evidence.StoreInRepo {
 		return nil
@@ -57,7 +57,7 @@ func publishRunEvidence(sctx *pipeline.StepContext) *evidenceLinks {
 	}
 	repoPath := githubRepoPath(linkURL)
 	if repoPath == "" {
-		sctx.Log("test evidence not published: this provider has no derivable file links, linking local paths instead")
+		sctx.Log("test evidence not published: this provider has no derivable file links, so the evidence stays with the run")
 		return nil
 	}
 
@@ -82,7 +82,7 @@ func publishRunEvidence(sctx *pipeline.StepContext) *evidenceLinks {
 		ForbiddenBranches: []string{branch, sctx.Repo.DefaultBranch},
 	})
 	if err != nil {
-		sctx.Log(fmt.Sprintf("test evidence not published, linking local paths instead: %v", err))
+		sctx.Log(fmt.Sprintf("test evidence not published, it stays with the run: %v", err))
 		return nil
 	}
 	if result == nil || result.CommitSHA == "" {

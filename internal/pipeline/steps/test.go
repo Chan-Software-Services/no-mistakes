@@ -187,9 +187,9 @@ Previous test findings to address:
 		sctx.Log("baseline tests passed, asking agent to gather live evidence...")
 	}
 	reassessHistory := executionContextPromptSection(sctx.WorkDir) + roundHistoryPromptSection(sctx) + userIntentPromptSection(sctx) + planSection + testguidance.Rule
-	evidenceGuidance := fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree: %s", evidenceDir)
+	evidenceGuidance := fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; the PR shows the text of an evidence file only when its name has a text extension such as .txt, .log or .json, and any other file is only listed as kept with the run: %s", evidenceDir)
 	if sctx.Config.Test.Evidence.StoreInRepo {
-		evidenceGuidance = fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; evidence files other than screenshots and recordings are published to the repository's %s branch automatically and linked from the PR: %s", sctx.Config.Test.Evidence.Branch, evidenceDir)
+		evidenceGuidance = fmt.Sprintf("- Write new evidence files into this evidence directory, never into the worktree; text evidence files (logs, command output, JSON and similar, in a file whose name has a text extension such as .txt, .log or .json) are published to the repository's %s branch automatically and shown in the PR, and every other file, screenshots, recordings, archives and HTML reports included, stays local with the run: %s", sctx.Config.Test.Evidence.Branch, evidenceDir)
 	}
 	configuredTestCommand := ""
 	if testCmd != "" {

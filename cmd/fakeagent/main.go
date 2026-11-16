@@ -86,7 +86,12 @@ type ghStubInvocation struct {
 }
 
 func runGhForkPRStub(args []string) int {
-	recordGhStubInvocation(args)
+	inv := recordGhStubInvocation(args)
+	if store, ok := ghPRStoreFromEnv(); ok {
+		if code, handled := store.handle(args, inv.Body); handled {
+			return code
+		}
+	}
 
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
 		return 0
@@ -130,17 +135,10 @@ func runGhForkPRStub(args []string) int {
 	return 1
 }
 
-func recordGhStubInvocation(args []string) {
-	logPath := os.Getenv("FAKEAGENT_GH_LOG")
-	if logPath == "" {
-		return
-	}
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
+// recordGhStubInvocation appends the call to $FAKEAGENT_GH_LOG and returns it,
+// with the body it read from stdin: stdin can be read only once, so a caller
+// that needs the body takes it from here.
+func recordGhStubInvocation(args []string) ghStubInvocation {
 	inv := ghStubInvocation{
 		Time: time.Now().Format(time.RFC3339Nano),
 		Args: append([]string(nil), args...),
@@ -152,7 +150,17 @@ func recordGhStubInvocation(args []string) {
 		body, _ := io.ReadAll(os.Stdin)
 		inv.Body = string(body)
 	}
+	logPath := os.Getenv("FAKEAGENT_GH_LOG")
+	if logPath == "" {
+		return inv
+	}
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return inv
+	}
+	defer f.Close()
 	_ = json.NewEncoder(f).Encode(inv)
+	return inv
 }
 
 // runTeaStub shadows any system-installed tea during the Gitea provider e2e
