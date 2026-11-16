@@ -131,6 +131,13 @@ const (
 	HumanCheckCommand = "no-mistakes sync --check"
 )
 
+// The keep-local custody recovery as each reader runs it: the axi form for an
+// agent surface, and the human form for a person's, the TUI included.
+const (
+	AgentRecoverKeepLocalCommand = "no-mistakes axi sync --recover --keep-local"
+	HumanRecoverKeepLocalCommand = "no-mistakes sync --recover --keep-local"
+)
+
 // RecoveryEvidence describes the exact preservation proof behind a recovery
 // action. Bound archive recovery is deliberately keep-local-only: the archive
 // preserves the divergent later head while custody returns at RequiredHead.
@@ -361,6 +368,7 @@ func (s *Service) Refresh(ctx context.Context) State {
 		state.State = StateOffline
 		state.Safety = "blocked_offline"
 		state.Error = "could not fetch the configured push target; no files or worktree refs were changed"
+		state.NextAction = &NextAction{Code: "retry", Command: AgentCheckCommand}
 		return state
 	}
 	fetched, err := git.Run(ctx, s.workDir(), "rev-parse", privateRef)
@@ -804,7 +812,7 @@ func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
 		if !keepLocal {
 			blocked := blockedPlan(state, StatePipelineOwned, "blocked_recover_archive_requires_keep_local", fmt.Sprintf("the later pipeline head %s is preserved at %s, but it diverges from required head %s; run only the offered keep-local custody recovery; no files or refs were changed", preserved, source.archive.ArchiveRef, source.archive.RequiredHeadSHA))
 			blocked.Recovery = source.evidence
-			blocked.NextAction = &NextAction{Code: "recover_custody", Command: "no-mistakes axi sync --recover --keep-local"}
+			blocked.NextAction = &NextAction{Code: "recover_custody", Command: AgentRecoverKeepLocalCommand}
 			return blocked
 		}
 		if !gateAvailable {
@@ -1965,7 +1973,7 @@ func (s *Service) classifyPipelineOwned(ctx context.Context, state *State, run *
 			if allEligible {
 				state.Safety = "blocked_recover_preserved_head_missing"
 				state.Error = "a stranded run's recorded pipeline head is not available in the invoking worktree or local gate; recover custody by keeping the current local head, which discards the missing preserved commits"
-				state.NextAction = &NextAction{Code: "recover_custody", Command: "no-mistakes axi sync --recover --keep-local"}
+				state.NextAction = &NextAction{Code: "recover_custody", Command: AgentRecoverKeepLocalCommand}
 				return
 			}
 			state.Safety = "blocked_recover_manual_reconciliation"
@@ -2328,7 +2336,7 @@ func (s *Service) verifyRecoveryArchiveRecord(ctx context.Context, state *State,
 	}
 
 	proof.available = true
-	proof.action = NextAction{Code: "recover_custody", Command: "no-mistakes axi sync --recover --keep-local"}
+	proof.action = NextAction{Code: "recover_custody", Command: AgentRecoverKeepLocalCommand}
 	proof.evidence.Proof = "verified"
 	return proof
 }
