@@ -344,7 +344,7 @@ func TestAxiStatusCachedBranchSyncDoesNotFetch(t *testing.T) {
 // the submitted head while the pushed head is not in the local object store
 // (blocked_relation_unknown) is shown with its note and next action, while a
 // branch no run is bound to (blocked_wrong_branch) stays out of the view.
-// The human status line names the same live check.
+// The human `no-mistakes status` line is held to the same two cases.
 func TestAxiStatusShowsRelationUnknownButNotOtherAmbiguousContext(t *testing.T) {
 	f := newCLISyncFixture(t)
 	if err := os.WriteFile(filepath.Join(f.local, "file.txt"), []byte("feature, rewritten\n"), 0o644); err != nil {
@@ -361,18 +361,32 @@ func TestAxiStatusShowsRelationUnknownButNotOtherAmbiguousContext(t *testing.T) 
 		}
 	}
 
-	unknown := branchsync.State{State: branchsync.StateAmbiguousContext, Safety: "blocked_relation_unknown"}
-	if got := humanSyncSummary(unknown); !strings.Contains(got, "`no-mistakes sync --check`") {
-		t.Fatalf("human status summary = %q, want it to name the live check", got)
+	out, err = executeCmd("status")
+	if err != nil {
+		t.Fatalf("human status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "local branch:") || !strings.Contains(out, "the pipeline-pushed commit is not available locally; check it live with `no-mistakes sync --check`") {
+		t.Fatalf("human status missing the relation-unknown summary:\n%s", out)
 	}
 
 	cliGit(t, f.local, "checkout", "-b", "feature/unbound")
+	out, _ = executeCmd("axi", "sync", "--check")
+	if !strings.Contains(out, "state: ambiguous_context") || !strings.Contains(out, "safety: blocked_wrong_branch") {
+		t.Fatalf("fixture: the unbound branch is not ambiguous_context at blocked_wrong_branch:\n%s", out)
+	}
 	out, err = executeCmd("axi", "status")
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "branch_sync:") {
 		t.Fatalf("an unbound branch's ambiguous_context reached status:\n%s", out)
+	}
+	out, err = executeCmd("status")
+	if err != nil {
+		t.Fatalf("human status: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "local branch:") {
+		t.Fatalf("an unbound branch's ambiguous_context reached the human status:\n%s", out)
 	}
 }
 
