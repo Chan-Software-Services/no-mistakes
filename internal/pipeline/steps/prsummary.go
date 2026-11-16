@@ -1,7 +1,7 @@
 package steps
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/evidence"
+	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -102,6 +104,10 @@ type testingSummaryOptions struct {
 	// branch. It is nil when nothing was published, and the artifacts then
 	// render as local paths rather than as links that would not resolve.
 	evidence *evidenceLinks
+	// pushedTree reports whether a repository path is in the tree the PR
+	// shows; a path that is not is never linked (pushedTreeCheck). Nil links
+	// every repository path.
+	pushedTree func(repoPath string) bool
 }
 
 // BuildPipelineSummary produces a deterministic markdown section from step results and rounds.
@@ -355,6 +361,7 @@ func buildPRTestingSummary(steps []*db.StepResult, rounds map[string][]*db.StepR
 	opts.repoRoot = repoRoot
 	opts.evidenceRoot = evidenceRoot
 	opts.evidence = links
+	opts.pushedTree = pushedTreeCheck(repoRoot, ref)
 	return buildTestingSummary(steps, rounds, opts)
 }
 
@@ -671,7 +678,7 @@ func renderTestingArtifact(artifact types.TestArtifact, opts testingSummaryOptio
 	if isMediaArtifact(artifact) {
 		return renderMediaArtifact(artifact)
 	}
-	label := sanitizePromptText(artifact.Label)
+	label := publicArtifactLabel(artifact)
 	if label == "" {
 		return ""
 	}
@@ -682,7 +689,7 @@ func renderTestingArtifact(artifact types.TestArtifact, opts testingSummaryOptio
 	if target == "" {
 		target = artifactLinkTargetForPath(artifact, opts)
 	}
-	localPath := localArtifactPath(artifact.Path, opts)
+	keptLocal := artifactKeptWithRun(artifact.Path, opts)
 	fileText, hasFile := embeddedArtifactText(artifact, opts, state)
 	caption := artifact.Content
 	fenceBody, descriptionLine := caption, ""
@@ -694,8 +701,8 @@ func renderTestingArtifact(artifact types.TestArtifact, opts testingSummaryOptio
 	if !hasFile {
 		if target != "" {
 			b.WriteString(fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target))
-		} else if localPath != "" {
-			b.WriteString(renderLocalArtifactLine(label, localPath, opts.flavor))
+		} else if keptLocal {
+			b.WriteString(renderLocalArtifactLine(label))
 		}
 	}
 	if descriptionLine != "" {
@@ -719,20 +726,20 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 	if target == "" {
 		target = artifactLinkTargetForPath(artifact, opts)
 	}
-	localPath := localArtifactPath(artifact.Path, opts)
+	keptLocal := artifactKeptWithRun(artifact.Path, opts)
 	fileText, hasFile := embeddedArtifactText(artifact, opts, state)
 	caption := artifact.Content
 
-	if target == "" && localPath == "" && caption == "" && !hasFile {
+	if target == "" && !keptLocal && caption == "" && !hasFile {
 		return ""
 	}
 
-	// No embeddable text: render a link or local-file reference (binaries).
+	// No embeddable text: render a link, or say the file stayed local (binaries).
 	if caption == "" && !hasFile {
 		if target != "" {
 			return fmt.Sprintf("- Evidence: [%s](%s)\n", html.EscapeString(label), target)
 		}
-		return renderLocalArtifactLine(label, localPath, opts.flavor)
+		return renderLocalArtifactLine(label)
 	}
 
 	fenceBody, descriptionLine := caption, ""
@@ -743,8 +750,8 @@ func renderCompactTestingArtifact(artifact types.TestArtifact, opts testingSumma
 	var inner strings.Builder
 	if target != "" {
 		inner.WriteString(fmt.Sprintf("Source: [%s](%s)\n\n", html.EscapeString(label), target))
-	} else if !hasFile && localPath != "" {
-		inner.WriteString(renderLocalArtifactReference("Source", label, localPath, opts.flavor))
+	} else if !hasFile && keptLocal {
+		inner.WriteString(renderLocalArtifactReference("Source", label))
 		inner.WriteString("\n")
 	}
 	if descriptionLine != "" {
@@ -782,8 +789,9 @@ func renderMediaArtifact(artifact types.TestArtifact) string {
 // embeddedArtifactText reads a file artifact and returns its text content,
 // truncated from the middle when it exceeds maxEmbeddedArtifactBytes. ok is
 // false when the artifact has no path, resolves outside the allowed roots, is
-// missing, empty, or is not UTF-8 text. Image and video artifacts never reach
-// it: they render as their caption.
+// missing, empty, or is not text the public may be shown
+// (readEmbeddedArtifactText). Image and video artifacts never reach it: they
+// render as their caption.
 func embeddedArtifactText(artifact types.TestArtifact, opts testingSummaryOptions, state *testingArtifactRenderState) (string, bool) {
 	if artifact.Path == "" {
 		return "", false
@@ -839,24 +847,34 @@ func isTestScratchPath(p string, opts testingSummaryOptions) bool {
 	return ok && strings.SplitN(filepath.ToSlash(rel), "/", 2)[0] == evidence.ScratchDirName
 }
 
+// readEmbeddedArtifactText returns the text of an evidence file the PR body may
+// embed, cut from the middle when it is larger than maxEmbeddedArtifactBytes,
+// or "" when the file may not be shown. The PR body is as public as the
+// evidence branch, so the same rule decides both: a file no larger than
+// evidence.MaxFileBytes that evidence.IsPublishableText accepts, which reads
+// the whole file, not only the part shown.
 func readEmbeddedArtifactText(fsPath string) (string, error) {
 	info, err := os.Stat(fsPath)
 	if err != nil || info.IsDir() {
 		return "", err
 	}
-	if info.Size() <= int64(maxEmbeddedArtifactBytes) {
-		data, err := os.ReadFile(fsPath)
-		if err != nil || !looksLikeTextArtifact(data) {
-			return "", err
-		}
-		return string(data), nil
+	// The size bound comes first, so a file too large for the evidence branch
+	// is not scanned for the PR body either.
+	if info.Size() > evidence.MaxFileBytes {
+		return "", nil
 	}
-
 	file, err := os.Open(fsPath)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
+	if !evidence.IsPublishableText(filepath.Base(fsPath), file) {
+		return "", nil
+	}
+	if info.Size() <= int64(maxEmbeddedArtifactBytes) {
+		data, err := os.ReadFile(fsPath)
+		return string(data), err
+	}
 
 	headSize := maxEmbeddedArtifactBytes / 2
 	tailSize := maxEmbeddedArtifactBytes - headSize
@@ -870,21 +888,8 @@ func readEmbeddedArtifactText(fsPath string) (string, error) {
 	}
 	head = trimUTF8End(head)
 	tail = trimUTF8Start(tail)
-	if !looksLikeTextArtifact(head) || !looksLikeTextArtifact(tail) {
-		return "", nil
-	}
 	omitted := info.Size() - int64(len(head)+len(tail))
 	return string(head) + fmt.Sprintf("\n\n... [%d bytes truncated] ...\n\n", omitted) + string(tail), nil
-}
-
-func looksLikeTextArtifact(data []byte) bool {
-	if len(data) == 0 {
-		return false
-	}
-	if bytes.IndexByte(data, 0) != -1 {
-		return false
-	}
-	return utf8.Valid(data)
 }
 
 func trimUTF8End(data []byte) []byte {
@@ -910,7 +915,7 @@ func artifactLinkTargetForPath(artifact types.TestArtifact, opts testingSummaryO
 		return target
 	}
 	repoPath := repoRelativeArtifactPath(artifact.Path, opts)
-	if repoPath == "" {
+	if repoPath == "" || !opts.inPushedTree(repoPath) {
 		return ""
 	}
 	if opts.githubBlobBase == "" {
@@ -967,14 +972,43 @@ func repoRelativeArtifactPath(target string, opts testingSummaryOptions) string 
 	return filepath.ToSlash(rel)
 }
 
-func localArtifactPath(target string, opts testingSummaryOptions) string {
-	if target == "" || !filepath.IsAbs(target) {
-		return ""
+// artifactKeptWithRun reports whether target names a file the PR body can only
+// say stayed with the run: an absolute path outside the worktree, or a
+// repository path whose file is not in the pushed tree. A Test scratch file is
+// never named at all.
+func artifactKeptWithRun(target string, opts testingSummaryOptions) bool {
+	if target == "" || isTestScratchPath(target, opts) {
+		return false
 	}
-	if _, ok := artifactPathRelativeToRoot(target, opts.repoRoot); ok || isTestScratchPath(target, opts) {
-		return ""
+	repoPath := repoRelativeArtifactPath(target, opts)
+	if repoPath == "" {
+		return filepath.IsAbs(target)
 	}
-	return target
+	return !opts.inPushedTree(repoPath)
+}
+
+// inPushedTree reports whether repoPath may be linked as a file of the
+// repository. With no check configured (a summary that is not a PR body) every
+// repository path is linked as before.
+func (opts testingSummaryOptions) inPushedTree(repoPath string) bool {
+	return opts.pushedTree == nil || opts.pushedTree(repoPath)
+}
+
+// pushedTreeCheck answers whether a repository path exists in the tree at ref,
+// the head the PR shows. A test run leaves files in the worktree that were
+// never committed, and a link to one would resolve nowhere and name a file
+// that exists only on the machine. Any failure to prove the path is in the
+// tree answers false.
+func pushedTreeCheck(repoRoot, ref string) func(string) bool {
+	return func(repoPath string) bool {
+		if repoRoot == "" || ref == "" || strings.HasPrefix(ref, "-") {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := git.Run(ctx, repoRoot, "cat-file", "-e", ref+":"+repoPath)
+		return err == nil
+	}
 }
 
 func artifactPathRelativeToRoot(target, root string) (string, bool) {
@@ -1028,16 +1062,73 @@ func sameVolume(a, b string) bool {
 	return strings.EqualFold(filepath.VolumeName(a), filepath.VolumeName(b)) || filepath.VolumeName(a) == "" || filepath.VolumeName(b) == ""
 }
 
-func renderLocalArtifactLine(label, localPath string, flavor prBodyFlavor) string {
-	return renderLocalArtifactReference("- Evidence", label, localPath, flavor)
+// renderLocalArtifactLine names an artifact whose file is neither linked nor
+// embedded. The PR body is public and the file is not, so the line says only
+// that it exists and stayed with the run: never its path or its file name.
+func renderLocalArtifactLine(label string) string {
+	return renderLocalArtifactReference("- Evidence", label)
 }
 
-func renderLocalArtifactReference(prefix, label, localPath string, flavor prBodyFlavor) string {
-	path := "<code>" + html.EscapeString(localPath) + "</code>"
-	if flavor == prBodyMarkdown {
-		path = "`" + localPath + "`"
+func renderLocalArtifactReference(prefix, label string) string {
+	return fmt.Sprintf("%s: %s (kept with the run, not published)\n", prefix, html.EscapeString(label))
+}
+
+// neutralArtifactLabels are what an artifact is called, by its kind, when the
+// agent's label cannot be published.
+var neutralArtifactLabels = map[string]string{
+	"log":            "Log",
+	"command-output": "Command output",
+	"output":         "Command output",
+}
+
+// publicArtifactLabel is the name a non-media artifact carries in the PR body:
+// the agent's label when it says what the evidence is, and a neutral label for
+// its kind when the label names a file or a path, which agents routinely do.
+// A local file name says nothing to a reader of the PR and is not theirs to
+// see, so recognition errs toward the neutral label.
+func publicArtifactLabel(artifact types.TestArtifact) string {
+	label := sanitizePromptText(artifact.Label)
+	if label == "" || !labelNamesFile(label, artifact.Path) {
+		return label
 	}
-	return fmt.Sprintf("%s: %s (local file: %s)\n", prefix, html.EscapeString(label), path)
+	if neutral, ok := neutralArtifactLabels[strings.ToLower(strings.TrimSpace(artifact.Kind))]; ok {
+		return neutral
+	}
+	return "Artifact"
+}
+
+var (
+	// fileNameTokenPattern matches a file extension anywhere in a word: a dot
+	// and a letter-led run of letters and digits, ended by the word's end or by
+	// anything that is neither.
+	fileNameTokenPattern = regexp.MustCompile(`\.[A-Za-z][A-Za-z0-9]*(?:$|[^A-Za-z0-9])`)
+	// pathTokenPattern matches a word that is a filesystem path: home-relative,
+	// dot-relative, a Windows drive or share, or absolute with at least two
+	// segments (one segment, "/checkout", reads as a route).
+	pathTokenPattern = regexp.MustCompile(`^(?:~|\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\|/[^/]+/.)`)
+)
+
+// labelNamesFile reports whether any word of label is a file name or a path:
+// it holds a file extension, it is a filesystem path, or it is the base name
+// of the artifact's own file.
+func labelNamesFile(label, artifactPath string) bool {
+	base := ""
+	if artifactPath != "" {
+		base = path.Base(filepath.ToSlash(artifactPath))
+	}
+	for _, word := range strings.Fields(label) {
+		word = strings.TrimRight(strings.Trim(word, "\"'`()[]{}<>,;:!?*"), ".")
+		if word == "" {
+			continue
+		}
+		if fileNameTokenPattern.MatchString(word) || pathTokenPattern.MatchString(word) || strings.Contains(word, "\\") {
+			return true
+		}
+		if base != "" && base != "." && base != "/" && word == base {
+			return true
+		}
+	}
+	return false
 }
 
 func sanitizeArtifactURL(target string) string {

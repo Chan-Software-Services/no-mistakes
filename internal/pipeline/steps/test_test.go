@@ -1137,7 +1137,7 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 		"For UI, HTML, CSS, Electron renderer, browser, visual layout, or copy-placement changes, attempt to capture reviewer-visible visual evidence",
 		"DOM snapshots, selector assertions, and text-only render summaries are not substitutes for visual evidence when a rendered surface is available",
 		"If a UI-facing change has no screenshot, image, video, GIF, or rendered HTML artifact, state why in testing_summary",
-		"Write new evidence files into this evidence directory, never into the worktree:",
+		"Write new evidence files into this evidence directory, never into the worktree;",
 		sctx.EvidenceDir,
 		"Do not move, commit, or modify source files only to make evidence linkable",
 		"if no existing check drives a scenario, write or improve a focused test",
@@ -1189,7 +1189,7 @@ func TestTestStep_EvidenceDirectoryIsAlwaysOutsideTheWorktree(t *testing.T) {
 
 	prompt := ag.calls[0].Prompt
 	wantDir := sctx.EvidenceDir
-	if !strings.Contains(prompt, "Write new evidence files into this evidence directory, never into the worktree: "+wantDir) {
+	if !strings.Contains(prompt, "Write new evidence files into this evidence directory, never into the worktree; the PR shows the text of an evidence file only when its name has a text extension such as .txt, .log or .json, and any other file is only listed as kept with the run: "+wantDir) {
 		t.Fatalf("expected evidence guidance to point outside the worktree, got:\n%s", prompt)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".no-mistakes")); err == nil {
@@ -1218,7 +1218,7 @@ func TestTestStep_PublishedEvidenceGuidanceNamesTheEvidenceBranch(t *testing.T) 
 
 	prompt := ag.calls[0].Prompt
 	wantDir := sctx.EvidenceDir
-	if !strings.Contains(prompt, "evidence files other than screenshots and recordings are published to the repository's team/ci/evidence branch automatically and linked from the PR: "+wantDir) {
+	if !strings.Contains(prompt, "text evidence files (logs, command output, JSON and similar, in a file whose name has a text extension such as .txt, .log or .json) are published to the repository's team/ci/evidence branch automatically and shown in the PR, and every other file, screenshots, recordings, archives and HTML reports included, stays local with the run: "+wantDir) {
 		t.Fatalf("expected evidence-branch publishing guidance, got:\n%s", prompt)
 	}
 	if strings.Contains(prompt, "committed and pushed automatically") {

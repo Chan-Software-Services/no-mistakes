@@ -854,7 +854,7 @@ Fields not set here inherit from global config and then the built-in defaults.
 By default, test evidence is written to `<NM_HOME>/evidence/<run-id>`. Where it is stored locally and how long it is kept are global-only settings; see [`test.evidence`](/no-mistakes/reference/global-config/#testevidence).
 Image and video evidence never leaves the machine: nothing is uploaded, and the PR body describes each screenshot or recording by its caption in words.
 `attach_media` is retired and changes nothing.
-For GitHub repositories, set `store_in_repo: true` to also publish the run's evidence other than images and videos to an orphan evidence branch in the code branch's push-target repository and link the artifacts from the PR body; evidence is never committed to the pushed branch, so it never reaches the default branch.
+For GitHub repositories, set `store_in_repo: true` to also publish the run's text evidence (logs, command output, JSON and similar) to an orphan evidence branch in the code branch's push-target repository and link the artifacts from the PR body; evidence is never committed to the pushed branch, so it never reaches the default branch.
 `test.evidence.branch` is read ONLY from the trusted default-branch copy of this file, because it names a git ref the daemon pushes to; a pushed branch cannot redirect evidence commits.
 See [global config](/no-mistakes/reference/global-config/#testevidence) for provider support, limits, validation, and fail-closed behavior.
 

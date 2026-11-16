@@ -94,20 +94,18 @@ func TestPublishRunEvidence_LandsOnOrphanBranchAndLinksFromThePRBody(t *testing.
 
 	tip := gitCmd(t, remote, "rev-parse", "refs/heads/no-mistakes/evidence")
 	tree := gitCmd(t, remote, "ls-tree", "-r", "--name-only", tip)
-	for _, want := range []string{
-		".no-mistakes/evidence/feature/add-login/trace.bin",
-		".no-mistakes/evidence/feature/add-login/cli-run.txt",
-	} {
-		if !strings.Contains(tree, want) {
-			t.Errorf("evidence branch missing %q, has:\n%s", want, tree)
+	if want := ".no-mistakes/evidence/feature/add-login/cli-run.txt"; !strings.Contains(tree, want) {
+		t.Errorf("evidence branch missing %q, has:\n%s", want, tree)
+	}
+	for _, unwanted := range []string{"checkout.png", "trace.bin"} {
+		if strings.Contains(tree, unwanted) {
+			t.Errorf("evidence branch carries %q, which is not text evidence, has:\n%s", unwanted, tree)
 		}
 	}
-	if strings.Contains(tree, "checkout.png") {
-		t.Errorf("evidence branch carries a screenshot, has:\n%s", tree)
-	}
 
-	// The PR body links the published artifacts by evidence commit, and
-	// describes the screenshot by its caption only.
+	// The PR body links the published artifact by evidence commit, describes
+	// the screenshot by its caption only, and names the unpublished binary by
+	// its label alone.
 	steps, rounds := testStepWithArtifacts(fmt.Sprintf(
 		`{"kind":"screenshot","label":"Checkout screenshot","path":%q,"content":"The checkout page shows the order total."},{"kind":"log","label":"Checkout trace","path":%q},{"kind":"log","label":"CLI run","path":%q}`,
 		filepath.Join(evidenceDir, "checkout.png"),
@@ -117,9 +115,8 @@ func TestPublishRunEvidence_LandsOnOrphanBranchAndLinksFromThePRBody(t *testing.
 	md := BuildTestingSummaryForPR(steps, rounds, sctx.Repo.UpstreamURL, sctx.Run.HeadSHA, sctx.WorkDir, testEvidenceDir(sctx), links)
 	t.Logf("rendered PR testing markdown:\n%s", md)
 
-	wantLink := "https://github.com/example/widgets/blob/" + tip + "/.no-mistakes/evidence/feature/add-login/trace.bin"
-	if !strings.Contains(md, "- Evidence: [Checkout trace]("+wantLink+")") {
-		t.Fatalf("expected the PR body to link the evidence branch, got:\n%s", md)
+	if !strings.Contains(md, "- Evidence: Checkout trace (kept with the run, not published)") || strings.Contains(md, "trace.bin") {
+		t.Fatalf("expected the unpublished binary by its label only, got:\n%s", md)
 	}
 	if !strings.Contains(md, "- Screenshot: The checkout page shows the order total.") || strings.Contains(md, "checkout.png") {
 		t.Fatalf("expected the screenshot as its caption only, got:\n%s", md)
@@ -127,8 +124,8 @@ func TestPublishRunEvidence_LandsOnOrphanBranchAndLinksFromThePRBody(t *testing.
 	if !strings.Contains(md, "https://github.com/example/widgets/blob/"+tip+"/.no-mistakes/evidence/feature/add-login/cli-run.txt") {
 		t.Fatalf("expected the log artifact to link the evidence branch, got:\n%s", md)
 	}
-	if strings.Contains(md, "local file:") {
-		t.Fatalf("published evidence must not render as a local path, got:\n%s", md)
+	if strings.Contains(md, evidenceDir) {
+		t.Fatalf("the PR body must not carry the evidence directory, got:\n%s", md)
 	}
 
 	// Neither the default branch nor the run's own branch carries evidence.
@@ -146,8 +143,8 @@ func TestPublishRunEvidence_LandsOnOrphanBranchAndLinksFromThePRBody(t *testing.
 func TestPublishRunEvidence_PercentEncodesEveryArtifactPathSegment(t *testing.T) {
 	sctx, remote := newEvidencePublishContext(t, "feature/add-login")
 	sctx.Config.Test.Evidence.Dir = "evidence archive #1 100%"
-	artifact := "capture #1 100%/checkout 100%.bin"
-	writeRunEvidence(t, sctx, map[string]string{artifact: "\x00\x01 binary trace"})
+	artifact := "capture #1 100%/checkout 100%.txt"
+	writeRunEvidence(t, sctx, map[string]string{artifact: "checkout total printed\n"})
 	evidenceDir := testEvidenceDir(sctx)
 
 	links := publishRunEvidence(sctx)
@@ -160,7 +157,7 @@ func TestPublishRunEvidence_PercentEncodesEveryArtifactPathSegment(t *testing.T)
 		filepath.Join(evidenceDir, filepath.FromSlash(artifact)),
 	))
 	md := BuildTestingSummaryForPR(steps, rounds, sctx.Repo.UpstreamURL, sctx.Run.HeadSHA, sctx.WorkDir, testEvidenceDir(sctx), links)
-	want := "https://github.com/example/widgets/blob/" + tip + "/evidence%20archive%20%231%20100%25/feature/add-login/capture%20%231%20100%25/checkout%20100%25.bin"
+	want := "https://github.com/example/widgets/blob/" + tip + "/evidence%20archive%20%231%20100%25/feature/add-login/capture%20%231%20100%25/checkout%20100%25.txt"
 	if !strings.Contains(md, want) {
 		t.Fatalf("expected every artifact path segment to be encoded as %q, got:\n%s", want, md)
 	}
@@ -184,7 +181,7 @@ func TestPublishRunEvidence_UsesTheConfiguredBranchName(t *testing.T) {
 	}
 }
 
-func TestPublishRunEvidence_InvalidBranchNameFallsBackToLocalPaths(t *testing.T) {
+func TestPublishRunEvidence_InvalidBranchNameKeepsEvidenceWithTheRun(t *testing.T) {
 	sctx, remote := newEvidencePublishContext(t, "feature/add-login")
 	sctx.Config.Test.Evidence.Branch = "not a branch"
 	writeRunEvidence(t, sctx, map[string]string{"cli-run.txt": "it works\n"})
@@ -202,8 +199,8 @@ func TestPublishRunEvidence_InvalidBranchNameFallsBackToLocalPaths(t *testing.T)
 		filepath.Join(evidenceDir, "trace.bin"),
 	))
 	md := BuildTestingSummaryForPR(steps, rounds, sctx.Repo.UpstreamURL, sctx.Run.HeadSHA, sctx.WorkDir, testEvidenceDir(sctx), nil)
-	if !strings.Contains(md, "local file:") {
-		t.Fatalf("expected unpublished evidence to render as a local path, got:\n%s", md)
+	if !strings.Contains(md, "- Evidence: Checkout trace (kept with the run, not published)") || strings.Contains(md, evidenceDir) || strings.Contains(md, "trace.bin") {
+		t.Fatalf("expected unpublished evidence by its label only, got:\n%s", md)
 	}
 }
 
