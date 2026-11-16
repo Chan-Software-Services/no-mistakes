@@ -136,6 +136,9 @@ func TestAxiSyncCheckNamesAxiCheckWhenOffline(t *testing.T) {
 		t.Fatalf("fixture: axi sync did not report blocked_offline:\n%s", out)
 	}
 	assertAgentNextAction(t, "axi sync", out, "retry")
+	if want := "Run `" + agentCheckSyncCommand + "`"; !strings.Contains(out, want) {
+		t.Errorf("axi sync help missing %q:\n%s", want, out)
+	}
 
 	out, _ = executeCmd("sync", "--check")
 	if strings.Contains(out, "axi sync") {

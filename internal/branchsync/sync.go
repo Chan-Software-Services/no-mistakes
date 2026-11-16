@@ -115,9 +115,10 @@ type RemoteState struct {
 }
 
 // NextAction is the one action a state offers. Command is the exact command an
-// agent runs for it: the agent surfaces print it as
-// branch_sync.next_action.command and in their help, and the human surfaces
-// never print it, so it names the axi form wherever one exists.
+// agent runs for it: every agent surface prints it as
+// branch_sync.next_action.command, and axi sync, axi abort and the axi run
+// ownership refusal also print it in their help; the human surfaces never
+// print it, so it names the axi form wherever one exists.
 type NextAction struct {
 	Code    string
 	Command string
