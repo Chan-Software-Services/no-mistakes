@@ -2,7 +2,10 @@ package stepstest
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 )
 
 // The git template SetupGitRepo copies from is made once per test binary in
@@ -36,5 +39,36 @@ func TestInitCleanupRemovesTheGitRepoTemplate(t *testing.T) {
 	}
 	if err := cleanup(); err != nil {
 		t.Fatalf("second cleanup: %v", err)
+	}
+}
+
+// The template's commits must start no auto-maintenance: a detached
+// `git maintenance run --auto` takes .git/objects/maintenance.lock after the
+// commit has returned, and a SetupGitRepo copying the template then can list
+// the lock and lstat it after it is gone.
+func TestGitRepoTemplateStartsNoAutoMaintenance(t *testing.T) {
+	if err := removeGitRepoTemplate(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = removeGitRepoTemplate() })
+	// A contributor's own maintenance.auto=false must not make the template
+	// look safe.
+	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(emptyConfig, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", emptyConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE2", trace)
+
+	GitRepoTemplate(t)
+
+	starts, err := testgit.AutoMaintenanceStarts(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(starts) != 0 {
+		t.Fatalf("making the template started auto-maintenance: %q", starts)
 	}
 }

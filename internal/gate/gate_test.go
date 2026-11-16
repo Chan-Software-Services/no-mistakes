@@ -13,6 +13,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 )
 
 func TestMain(m *testing.M) {
@@ -113,12 +114,42 @@ func setupTestRepo(t *testing.T) string {
 		t.Fatalf("add origin: %v: %s", err, out)
 	}
 
-	// Make an initial commit so HEAD exists.
-	if out, err := exec.Command("git", "-C", work, "commit", "--allow-empty", "-m", "init").CombinedOutput(); err != nil {
+	// Make an initial commit so HEAD exists, with background maintenance off:
+	// a detached `git maintenance run --auto` could take
+	// .git/objects/maintenance.lock under a copyDirTree of the repository.
+	commit := append(testgit.NoAutoMaintenance(), "-C", work, "commit", "--allow-empty", "-m", "init")
+	if out, err := exec.Command("git", commit...).CombinedOutput(); err != nil {
 		t.Fatalf("initial commit: %v: %s", err, out)
 	}
 
 	return work
+}
+
+// setupTestRepo's commit must start no auto-maintenance: a detached
+// `git maintenance run --auto` takes .git/objects/maintenance.lock after the
+// commit has returned, and copyDirTree walking the repository then can list
+// the lock and lstat it after it is gone.
+func TestSetupTestRepoStartsNoAutoMaintenance(t *testing.T) {
+	// A contributor's own maintenance.auto=false must not make the helper
+	// look safe.
+	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(emptyConfig, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", emptyConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE2", trace)
+
+	setupTestRepo(t)
+
+	starts, err := testgit.AutoMaintenanceStarts(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(starts) != 0 {
+		t.Fatalf("setupTestRepo started auto-maintenance: %q", starts)
+	}
 }
 
 func openTestDB(t *testing.T, p *paths.Paths) *db.DB {
