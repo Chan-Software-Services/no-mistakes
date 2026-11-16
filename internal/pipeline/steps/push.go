@@ -142,9 +142,9 @@ func publishRunHead(sctx *pipeline.StepContext, headBeingPushed, localRefUpdate 
 	// Prove the private mirror is safe to reconcile BEFORE anything is
 	// published: unproven private content must refuse while the branch is
 	// intact. Applying the plan is deferred until the upstream push is
-	// verified, because a refused or failed push is
-	// a designed outcome and a gate left with no branch ref would strand
-	// `rerun` and branch-sync recovery on a branch that never published.
+	// verified, because a refused or failed push is a designed outcome and a
+	// gate left with no branch ref would strand `rerun` and branch-sync
+	// recovery on a branch that never published.
 	mirrorPlan, err := planGateMirrorReconciliation(ctx, sctx, ref, branch, headBeingPushed)
 	if err != nil {
 		return err
@@ -236,12 +236,13 @@ func publishRunHead(sctx *pipeline.StepContext, headBeingPushed, localRefUpdate 
 }
 
 // planGateMirrorReconciliation inspects the gate mirror without mutating it.
-// The mirror is reconciled only when it is an ancestor of the pushed head, a
-// newer descendant left in place, or a head the content proof shows the pushed
-// head carries (docs/src/content/docs/concepts/gate-model.md); there is no
-// exception for a head this run placed there. assertPushHeadKeepsRunHistory
-// runs first and requires the pushed head to contain the run's submitted and
-// last pushed heads, so a mirror at either one is an ancestor.
+// The mirror is left alone when it is an ancestor of the pushed head or a
+// newer descendant of it, and is reconciled only when the content proof shows
+// the pushed head carries it (docs/src/content/docs/concepts/gate-model.md);
+// there is no exception for a head this run placed there.
+// assertPushHeadKeepsRunHistory runs first and requires the pushed head to
+// contain the run's submitted and last pushed heads, so a mirror at either one
+// is an ancestor.
 func planGateMirrorReconciliation(ctx context.Context, sctx *pipeline.StepContext, ref, branch, headBeingPushed string) (gatepkg.StaleBranchPlan, error) {
 	var plan gatepkg.StaleBranchPlan
 	if sctx.Repo == nil || strings.TrimSpace(sctx.GateDir) == "" {
