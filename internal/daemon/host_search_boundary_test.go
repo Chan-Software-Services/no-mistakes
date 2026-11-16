@@ -90,7 +90,7 @@ func TestNewPipelineAgent_SteersHostSearchBoundary(t *testing.T) {
 	}
 }
 
-// TestReadCapturedPrompt_NormalizesWindowsNewlines pins the windows-git failure
+// TestReadCapturedPrompt_NormalizesWindowsNewlines pins the Windows failure
 // shape: `more > file` stores WorktreeSteering as CRLF, so a raw Contains of
 // the LF preamble misses even though the host-search text and evidence path
 // were delivered. Newline folding is the whole allowance; the path still has

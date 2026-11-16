@@ -194,7 +194,7 @@ func waitForEvent(t *testing.T, ec *eventCollector, eventType ipc.EventType, sta
 func waitForStepStatus(t *testing.T, database *db.DB, runID string, stepName types.StepName, expected types.StepStatus) {
 	t.Helper()
 	// The executor and this poller share one SQLite connection (MaxOpenConns(1)).
-	// A 10ms loop starved writers on Windows CI: auto-fix rounds never reached
+	// A 10ms loop starved writers on Windows: auto-fix rounds never reached
 	// fix_review before the deadline, then TempDir cleanup failed because the
 	// still-running executor held lint.log open. Sleep long enough that a write
 	// can land between polls, and keep the deadline above a multi-round

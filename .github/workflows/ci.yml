@@ -12,6 +12,11 @@ on:
       - CHANGELOG.md
   workflow_dispatch:
 
+# No job writes to GitHub: checkout reads the repository, and setup-go's module
+# cache goes through the Actions cache service, not this token.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest

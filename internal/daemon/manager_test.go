@@ -1306,7 +1306,7 @@ func TestPushReceivedReturnsBeforeIntentSummarization(t *testing.T) {
 	// startRun's synchronous git plumbing (worktree add, identity copy,
 	// fetch, resolve-ref, config loads) staying well clear of the 3s the
 	// pipeline goroutine's slow agent call would take if it ever ran inline.
-	// Windows CI process-spawn overhead across those several git subprocess
+	// Windows process-spawn overhead across those several git subprocess
 	// calls is much higher than on macOS/Linux, so Windows gets generous
 	// headroom while non-Windows keeps the tight bound that would catch a
 	// real regression in startRun's synchronous git plumbing.
