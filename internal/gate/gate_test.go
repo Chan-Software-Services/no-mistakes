@@ -132,24 +132,12 @@ func setupTestRepo(t *testing.T) string {
 func TestSetupTestRepoStartsNoAutoMaintenance(t *testing.T) {
 	// A contributor's own maintenance.auto=false must not make the helper
 	// look safe.
-	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(emptyConfig, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", emptyConfig)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	trace := filepath.Join(t.TempDir(), "trace")
-	t.Setenv("GIT_TRACE2", trace)
+	testgit.IgnoreUserGitConfig(t)
+	trace := testgit.TraceGit(t)
 
 	setupTestRepo(t)
 
-	starts, err := testgit.AutoMaintenanceStarts(trace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(starts) != 0 {
-		t.Fatalf("setupTestRepo started auto-maintenance: %q", starts)
-	}
+	testgit.RequireNoAutoMaintenance(t, trace)
 }
 
 func openTestDB(t *testing.T, p *paths.Paths) *db.DB {
