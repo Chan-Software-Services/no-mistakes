@@ -62,6 +62,13 @@ type Action struct {
 	// DelayMS pauses before responding, for e2e tests that need an observable active run.
 	DelayMS int `yaml:"delay_ms,omitempty"`
 
+	// ReleaseFile holds the response until this path exists, for e2e tests
+	// that need a run to stay active until they have checked it: the test
+	// creates the file when it is done, so the hold lasts exactly as long as
+	// the check instead of a fixed delay. A file that never appears fails the
+	// invocation after releaseFileWait rather than hanging the run.
+	ReleaseFile string `yaml:"release_file,omitempty"`
+
 	// AskQuestions are raw questions.ndjson lines the fake reviewer appends to
 	// the run's review conversation before responding, which is how a real
 	// reviewer asks while it works. The directory is read out of the prompt
@@ -316,9 +323,17 @@ func applyAction(action Action) error {
 	return applyActionInDir(wd, action)
 }
 
+// releaseFileWait bounds how long an action holds for its ReleaseFile.
+var releaseFileWait = 2 * time.Minute
+
 func applyActionInDir(wd string, action Action) error {
 	if action.DelayMS > 0 {
 		time.Sleep(time.Duration(action.DelayMS) * time.Millisecond)
+	}
+	if action.ReleaseFile != "" {
+		if err := waitForReleaseFile(action.ReleaseFile, releaseFileWait); err != nil {
+			return err
+		}
 	}
 	if err := applyEditsInDir(wd, action.Edits); err != nil {
 		return err
@@ -327,6 +342,19 @@ func applyActionInDir(wd string, action Action) error {
 		return err
 	}
 	return runGitInDir(wd, action.Git)
+}
+
+func waitForReleaseFile(path string, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("release file %s did not appear within %s", path, wait)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // runGitInDir runs each scenario git invocation in wd. A failure is returned

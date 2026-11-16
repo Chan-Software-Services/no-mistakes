@@ -591,7 +591,10 @@ func TestReviewConversationTUIYoloLeavesTheQuestionOpen(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "python3", driver, h.NMBin, fw, "y", "6", "8")
+	// The yolo key goes in once the TUI has drawn the run, so it is never
+	// dropped before the TUI reads its input; the 8s after it are the window
+	// in which a wrongly sent response would land.
+	cmd := exec.CommandContext(ctx, "python3", driver, h.NMBin, fw, "y", branch, "60", "8")
 	cmd.Env = os.Environ()
 	screen, err := cmd.Output()
 	if err != nil {
@@ -824,10 +827,9 @@ func TestReviewConversationUnreadableQuestionHistoryNeedsAHuman(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 			defer cancel()
-			// The same waits as the open-question TUI case: a shorter pre-wait
-			// drops the keypress on a loaded machine before the TUI has read
-			// its first frame, and yolo then never engages at all.
-			cmd := exec.CommandContext(ctx, "python3", driver, h.NMBin, fw, "y", "6", "8")
+			// The same waits as the open-question TUI case: the key goes in
+			// once the TUI has drawn the run, then the 8s window.
+			cmd := exec.CommandContext(ctx, "python3", driver, h.NMBin, fw, "y", branch, "60", "8")
 			cmd.Env = os.Environ()
 			screen, cerr := cmd.Output()
 			if cerr != nil {

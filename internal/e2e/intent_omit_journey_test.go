@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,17 +15,21 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-// omitIntentSlowBranch is a branch whose step prompts the scenario answers
-// slowly, so the run stays observably active long enough for the reattach
-// conflict check to be exercised against it.
+// omitIntentSlowBranch is a branch whose step prompts the scenario holds
+// until the test releases them, so the run stays active for exactly as long
+// as the reattach conflict check exercised against it takes.
 const omitIntentSlowBranch = "feature/omit-reattach"
 
-func writeOmitIntentScenario(t *testing.T) string {
+// writeOmitIntentScenario writes the journey's scenario and returns its path
+// and the release file that lets omitIntentSlowBranch's prompts answer.
+func writeOmitIntentScenario(t *testing.T) (scenario, release string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "omit-intent-scenario.yaml")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "omit-intent-scenario.yaml")
+	release = filepath.Join(dir, "omit-reattach.release")
 	content := `actions:
   - match: "branch: ` + omitIntentSlowBranch + `"
-    delay_ms: 6000
+    release_file: ` + strconv.Quote(release) + `
     text: "slow clean step"
     structured:
       findings: []
@@ -72,7 +77,7 @@ func writeOmitIntentScenario(t *testing.T) string {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write omit intent scenario: %v", err)
 	}
-	return path
+	return path, release
 }
 
 // TestOmitIntentJourney drives the contributor-side Intent publication
@@ -89,7 +94,12 @@ func writeOmitIntentScenario(t *testing.T) string {
 //   - `axi run --no-publish-intent` against an active run started without it
 //     is refused rather than silently discarded.
 func TestOmitIntentJourney(t *testing.T) {
-	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: writeOmitIntentScenario(t)})
+	scenario, release := writeOmitIntentScenario(t)
+	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: scenario})
+	// Registered after the harness, so it runs before the daemon is stopped:
+	// a test that fails before the release below does not leave the held
+	// agent waiting out its bound.
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o644) })
 	ctx := context.Background()
 
 	parentURL := "https://github.com/parent-owner/no-mistakes.git"
@@ -260,6 +270,9 @@ func TestOmitIntentJourney(t *testing.T) {
 		t.Fatalf("axi run --no-publish-intent against a publishing active run should be refused, err=%v output:\n%s", err, out)
 	}
 	t.Logf("refused reattach:\n%s", strings.TrimSpace(out))
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatalf("release the held run: %v", err)
+	}
 	reattach := h.WaitForRun(omitIntentSlowBranch, 120*time.Second)
 	if reattach.Status != types.RunCompleted || reattach.OmitIntent {
 		t.Fatalf("active run after the refused reattach: status=%s omit_intent=%v (error=%v)", reattach.Status, reattach.OmitIntent, deref(reattach.Error))

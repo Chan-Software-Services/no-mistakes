@@ -83,6 +83,41 @@ func TestApplyActionHonorsDelay(t *testing.T) {
 	}
 }
 
+func TestApplyActionHoldsUntilTheReleaseFileExists(t *testing.T) {
+	release := filepath.Join(t.TempDir(), "release")
+	done := make(chan error, 1)
+	go func() { done <- applyActionInDir(t.TempDir(), Action{ReleaseFile: release}) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("applyActionInDir returned before the release file existed: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("applyActionInDir: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("applyActionInDir still held 5s after the release file appeared")
+	}
+}
+
+func TestApplyActionFailsWhenTheReleaseFileNeverAppears(t *testing.T) {
+	old := releaseFileWait
+	releaseFileWait = 100 * time.Millisecond
+	t.Cleanup(func() { releaseFileWait = old })
+
+	release := filepath.Join(t.TempDir(), "never")
+	err := applyActionInDir(t.TempDir(), Action{ReleaseFile: release})
+	if err == nil || !strings.Contains(err.Error(), release) {
+		t.Fatalf("applyActionInDir error = %v, want one naming %s", err, release)
+	}
+}
+
 func TestApplyEditsRejectsPathsOutsideWorkingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	outside := filepath.Join(filepath.Dir(dir), "outside.txt")
