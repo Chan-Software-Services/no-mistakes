@@ -350,11 +350,11 @@ no-mistakes daemon stop
 no-mistakes daemon start
 ```
 
-To remove a worktree the restart keeps, after deciding its contents can be discarded, use git on the gate repository the worktree belongs to (`~/.no-mistakes/repos/<id>.git`), not on your own checkout:
+To remove a worktree the restart keeps, after deciding its contents can be discarded, use git on the gate repository the worktree belongs to (`~/.no-mistakes/repos/<repoID>.git`), not on your own checkout:
 
 ```sh
-git --git-dir="$HOME/.no-mistakes/repos/<id>.git" worktree list
-git --git-dir="$HOME/.no-mistakes/repos/<id>.git" worktree remove --force <path>
+git --git-dir="$HOME/.no-mistakes/repos/<repoID>.git" worktree list
+git --git-dir="$HOME/.no-mistakes/repos/<repoID>.git" worktree remove --force <path>
 ```
 
 Run it only while no push to that repository is in flight and no run is starting: `git worktree remove` deletes the worktree's registration file by file, and a push that reads it half-deleted fails with `failed to read worktrees/<id>/commondir`.
