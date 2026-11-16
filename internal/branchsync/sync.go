@@ -376,6 +376,7 @@ func (s *Service) Refresh(ctx context.Context) State {
 		state.State = StateRemoteRewritten
 		state.Safety = "blocked_remote_changed_during_refresh"
 		state.Error = "the remote branch changed while it was being refreshed; no files or worktree refs were changed"
+		state.NextAction = &NextAction{Code: "retry", Command: AgentCheckCommand}
 		return state
 	}
 

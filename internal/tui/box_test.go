@@ -98,3 +98,29 @@ func TestRenderErrorBox_WrapsLongErrorsInsteadOfCuttingThem(t *testing.T) {
 		t.Fatalf("error box = %q, want the whole message %q", out, msg)
 	}
 }
+
+// TestRenderBox_TitleThatCannotFitIsCut renders a title at the exact width
+// that holds it, where the top border is drawn whole and the title in full,
+// and one column narrower, where the title is cut so the top border stays the
+// box's width instead of overflowing it.
+func TestRenderBox_TitleThatCannotFitIsCut(t *testing.T) {
+	const title = "Confirm local branch sync"
+	exact := len(title) + 6
+	for name, render := range map[string]func(int) string{
+		"renderBox":           func(width int) string { return renderBox(title, "content", width) },
+		"renderBoxWithFooter": func(width int) string { return renderBoxWithFooter(title, "content", width, "esc cancel") },
+	} {
+		top := strings.Split(stripANSI(render(exact)), "\n")[0]
+		if want := "╭─ " + title + " ─╮"; top != want {
+			t.Errorf("%s at the exact fit: top border = %q, want %q", name, top, want)
+		}
+
+		top = strings.Split(stripANSI(render(exact-1)), "\n")[0]
+		if want := "╭─ " + title[:len(title)-1] + " ─╮"; top != want {
+			t.Errorf("%s one column below the fit: top border = %q, want %q", name, top, want)
+		}
+		if got := lipgloss.Width(top); got != exact-1 {
+			t.Errorf("%s one column below the fit: top border is %d columns wide, want %d", name, got, exact-1)
+		}
+	}
+}
