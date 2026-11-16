@@ -185,8 +185,11 @@ func makeGitRepoTemplate() (dir, baseSHA, headSHA string, err error) {
 		}
 	}()
 
+	// Background maintenance off: a commit otherwise starts a detached
+	// `git maintenance run --auto` that can take .git/objects/maintenance.lock
+	// after the template is made, under the first SetupGitRepo copies.
 	run := func(args ...string) (string, error) {
-		cmd := exec.Command("git", args...)
+		cmd := exec.Command("git", append(testgit.NoAutoMaintenance(), args...)...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test",
