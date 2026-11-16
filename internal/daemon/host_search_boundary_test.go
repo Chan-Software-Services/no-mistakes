@@ -111,6 +111,6 @@ func TestReadCapturedPrompt_NormalizesWindowsNewlines(t *testing.T) {
 	}
 	raw := strings.ReplaceAll(preamble, "\n", "\r\n") + "hello"
 	if strings.Contains(raw, preamble) {
-		t.Fatal("raw CRLF capture already contained the LF preamble; the windows-git failure mode is gone from this fixture")
+		t.Fatal("raw CRLF capture already contained the LF preamble; the Windows failure mode is gone from this fixture")
 	}
 }
