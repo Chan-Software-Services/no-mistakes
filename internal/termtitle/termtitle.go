@@ -3,9 +3,10 @@
 //
 // A model must not write the title's OSC sequence into its frame: bubbletea's
 // renderer measures each frame line with x/ansi and cuts a line it measures
-// wider than the terminal, and x/ansi v0.11.6 counts some title sequences as
-// visible columns (a title that starts with a check or cross mark), so the
-// line carrying the title lost its right end.
+// wider than the terminal. x/ansi v0.11.6 ends an OSC sequence at any 0x9C
+// byte (the C1 String Terminator), which the UTF-8 of ✓ and ✗ contains, so it
+// counted the rest of such a title as visible columns and the line carrying
+// the title lost its right end.
 //
 // bubbletea runs each command in a goroutine of its own, so two title
 // commands could reach the terminal in either order. Title keeps one in

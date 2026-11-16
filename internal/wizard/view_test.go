@@ -181,9 +181,10 @@ func wizardTitleStates() map[string]func() Model {
 
 // TestView_FirstLineKeepsTheBoxWidthInEveryTitleState measures each frame's
 // lines as bubbletea's renderer does, escape sequences and all. The renderer
-// cuts a line it measures wider than the terminal, and x/ansi counts a title
-// OSC sequence that starts with a check or cross mark as visible columns, so
-// a title written into the frame cut the Setup box's top border short.
+// cuts a line it measures wider than the terminal, and x/ansi counts the rest
+// of a title OSC sequence after a ✓ or ✗ as visible columns (see package
+// termtitle), so a title written into the frame cut the Setup box's top border
+// short.
 func TestView_FirstLineKeepsTheBoxWidthInEveryTitleState(t *testing.T) {
 	for name, model := range wizardTitleStates() {
 		for _, width := range []int{60, 80, 100} {

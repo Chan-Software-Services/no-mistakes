@@ -318,9 +318,9 @@ func titleStates() map[string]func() Model {
 // TestView_FirstLineKeepsTheTerminalWidthInEveryTitleState measures each
 // frame's lines as bubbletea's renderer does, escape sequences and all, in the
 // stacked layout and in the wide layout at 105 and 119 columns. The renderer
-// cuts a line it measures wider than the terminal, and x/ansi counts a title
-// OSC sequence that starts with a check or cross mark as visible columns, so a
-// title written into the frame cut its first line short.
+// cuts a line it measures wider than the terminal, and x/ansi counts the rest
+// of a title OSC sequence after a ✓ or ✗ as visible columns (see package
+// termtitle), so a title written into the frame cut its first line short.
 func TestView_FirstLineKeepsTheTerminalWidthInEveryTitleState(t *testing.T) {
 	configureTUIColors()
 	for name, model := range titleStates() {
