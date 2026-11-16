@@ -300,6 +300,11 @@ func markdownCodeIn(content string, indentedCode bool) []bool {
 			paragraph = -1
 		}
 	}
+	popItemsPast := func(col int) {
+		for len(items) > 0 && items[len(items)-1] > col {
+			items = items[:len(items)-1]
+		}
+	}
 	offset := 0
 	for _, line := range splitLinesKeepEnds(content) {
 		start := offset
@@ -323,9 +328,7 @@ func markdownCodeIn(content string, indentedCode bool) []bool {
 		}
 		col, rest := indentColumns(line, 0)
 		if paragraph < 0 {
-			for len(items) > 0 && items[len(items)-1] > col {
-				items = items[:len(items)-1]
-			}
+			popItemsPast(col)
 			base := 0
 			if len(items) > 0 {
 				base = items[len(items)-1]
@@ -337,16 +340,16 @@ func markdownCodeIn(content string, indentedCode bool) []bool {
 		}
 		if width, after := listMarker(rest); width > 0 {
 			if paragraph >= 0 {
-				for len(items) > 0 && items[len(items)-1] > col {
-					items = items[:len(items)-1]
-				}
+				popItemsPast(col)
 			}
-			gap, _ := indentColumns(after, col+width)
-			if gap < 1 || gap > 4 || strings.TrimSpace(after) == "" {
+			rawGap, _ := indentColumns(after, col+width)
+			hasText := strings.TrimSpace(after) != ""
+			gap := rawGap
+			if gap < 1 || gap > 4 || !hasText {
 				gap = 1
 			}
 			items = append(items, col+width+gap)
-			if textCol, _ := indentColumns(after, col+width); indentedCode && paragraph < 0 && textCol-gap >= 4 {
+			if indentedCode && paragraph < 0 && hasText && rawGap-gap >= 4 {
 				markBytes(code[start:offset])
 				continue
 			}

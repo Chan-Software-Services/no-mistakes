@@ -294,6 +294,7 @@ func TestMarkdownIndentedCode(t *testing.T) {
 		{name: "block inside a nested item", content: "- a\n  - b\n\n        a — b\n"},
 		{name: "block after the list ended", content: "- item\n\ntext\n\n    a — b\n"},
 		{name: "marker then five spaces", content: "-     a — b\n"},
+		{name: "empty item with trailing spaces opens a paragraph", content: "-     \n      a — b\n", want: "-     \n      a - b\n"},
 		{name: "list continuation indented four", content: "- item\n\n    more — text\n", want: "- item\n\n    more - text\n"},
 		{name: "ordered list continuation indented four", content: "1. item\n\n    more — text\n", want: "1. item\n\n    more - text\n"},
 		{name: "nested list continuation", content: "- a\n  - b\n\n      more — text\n", want: "- a\n  - b\n\n      more - text\n"},
