@@ -27,7 +27,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.applySyncCmd()
 		case "q", "ctrl+c":
 			m.quitting = true
-			return m, tea.Sequence(tea.SetWindowTitle(""), tea.Quit)
+			return m, nil
 		default:
 			return m, nil
 		}
@@ -46,7 +46,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.applyRecoverCmd()
 		case "q", "ctrl+c":
 			m.quitting = true
-			return m, tea.Sequence(tea.SetWindowTitle(""), tea.Quit)
+			return m, nil
 		default:
 			return m, nil
 		}
@@ -64,8 +64,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "q", "ctrl+c":
+		// Update clears the terminal title, then quits.
 		m.quitting = true
-		return m, tea.Sequence(tea.SetWindowTitle(""), tea.Quit)
+		return m, nil
 
 	case "?":
 		m.showHelp = !m.showHelp

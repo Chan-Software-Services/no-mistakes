@@ -268,7 +268,7 @@ func (m Model) View() string {
 		}
 		rightSections = append(rightSections, extraSections...)
 		columns := renderResponsiveColumns(joinSections(leftSections, sectionGap), joinSections(rightSections, sectionGap), leftWidth, rightWidth, responsiveLayoutGap)
-		return setTerminalTitle(m.terminalTitle()) + joinSections([]string{columns, footer}, sectionGap)
+		return joinSections([]string{columns, footer}, sectionGap)
 	}
 
 	sections := []string{pipelineView}
@@ -283,7 +283,7 @@ func (m Model) View() string {
 	}
 	sections = append(sections, extraSections...)
 	sections = append(sections, footer)
-	return setTerminalTitle(m.terminalTitle()) + joinSections(sections, sectionGap)
+	return joinSections(sections, sectionGap)
 }
 
 func renderFindingsBoxForHeight(raw string, width int, cursor int, selected map[string]bool, boxHeight int) string {
