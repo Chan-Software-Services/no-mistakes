@@ -129,8 +129,8 @@ func TestExecutor_LogChunkThrottlesStepActivityWrites(t *testing.T) {
 	}
 	// Start and completion each update activity once. Streaming may update once
 	// immediately and once per complete throttle interval after that; a fixed
-	// count is invalid when race-enabled Windows CI takes several seconds to
-	// write the chunks under filesystem contention.
+	// count is invalid when a race-enabled run on Windows takes several seconds
+	// to write the chunks under filesystem contention.
 	maxUpdates := int(chunkDuration/stepActivityThrottleInterval) + 3
 	if updates > maxUpdates {
 		t.Fatalf("step activity updates = %d over %s, want throttled count <= %d", updates, chunkDuration, maxUpdates)

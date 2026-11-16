@@ -47,8 +47,8 @@ func TestSubscribeReceivesEvents(t *testing.T) {
 	}
 
 	// Wait for step to reach awaiting_approval. Reaching the gate spawns git
-	// and agent processes, which is slow on the process-spawn-bound Windows
-	// runner, so use the same Windows-aware budget as waitForDaemonReady.
+	// and agent processes, which is slow on process-spawn-bound Windows
+	// hosts, so use the same Windows-aware budget as waitForDaemonReady.
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		steps, _ := d.GetStepsByRun(pushResult.RunID)

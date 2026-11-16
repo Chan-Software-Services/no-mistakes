@@ -305,11 +305,11 @@ func TestOMPGateNeutralization_AppliesSuppressionOverlayAndFlags(t *testing.T) {
 	}
 }
 
-// TestOverlayPathShellSafe pins the cross-platform path rule that keeps
-// windows-core green: a Windows temp path (backslashes, drive colon) composes
-// safely into acpx's --agent command, while whitespace and quotes are unsafe on
-// every OS and a backslash is anomalous - and refused - off Windows. goos is a
-// parameter so both branches are proven from any host.
+// TestOverlayPathShellSafe pins the cross-platform path rule that keeps the
+// overlay usable on a Windows host: a Windows temp path (backslashes, drive
+// colon) composes safely into acpx's --agent command, while whitespace and
+// quotes are unsafe on every OS and a backslash is anomalous - and refused -
+// off Windows. goos is a parameter so both branches are proven from any host.
 func TestOverlayPathShellSafe(t *testing.T) {
 	cases := []struct {
 		name string
