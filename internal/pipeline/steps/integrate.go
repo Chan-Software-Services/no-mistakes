@@ -195,7 +195,7 @@ func rebaseOrigHead(sctx *pipeline.StepContext, run gitRunner) string {
 // swallowed, so nothing is described as restored that was not.
 //
 // HEAD ATTACHMENT is deliberately not verified. The pipeline's run worktree is
-// created detached (`git worktree add --detach`) and no step ever checks a
+// created detached (`git.WorktreeAdd`) and no step ever checks a
 // branch out in it, so requiring an attached HEAD would report every correct
 // restore as a failed one; the commit comparison is what proves the restore.
 func restoreWorktreeHead(sctx *pipeline.StepContext, run gitRunner, head string) error {

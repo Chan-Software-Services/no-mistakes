@@ -339,6 +339,57 @@ func TestAxiStatusCachedBranchSyncDoesNotFetch(t *testing.T) {
 	}
 }
 
+// TestAxiStatusShowsRelationUnknownButNotOtherAmbiguousContext pins which
+// ambiguous_context states the cached status shows: a local head that left
+// the submitted head while the pushed head is not in the local object store
+// (blocked_relation_unknown) is shown with its note and next action, while a
+// branch no run is bound to (blocked_wrong_branch) stays out of the view.
+// The human `no-mistakes status` line is held to the same two cases.
+func TestAxiStatusShowsRelationUnknownButNotOtherAmbiguousContext(t *testing.T) {
+	f := newCLISyncFixture(t)
+	if err := os.WriteFile(filepath.Join(f.local, "file.txt"), []byte("feature, rewritten\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cliGit(t, f.local, "commit", "-a", "--amend", "-m", "feature, rewritten")
+	out, err := executeCmd("axi", "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	for _, want := range []string{"branch_sync:", "state: ambiguous_context", "safety: blocked_relation_unknown", "the pipeline-pushed commit is not available locally", "code: check_sync"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("relation-unknown status missing %q:\n%s", want, out)
+		}
+	}
+
+	out, err = executeCmd("status")
+	if err != nil {
+		t.Fatalf("human status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "local branch:") || !strings.Contains(out, "the pipeline-pushed commit is not available locally; check it live with `no-mistakes sync --check`") {
+		t.Fatalf("human status missing the relation-unknown summary:\n%s", out)
+	}
+
+	cliGit(t, f.local, "checkout", "-b", "feature/unbound")
+	out, _ = executeCmd("axi", "sync", "--check")
+	if !strings.Contains(out, "state: ambiguous_context") || !strings.Contains(out, "safety: blocked_wrong_branch") {
+		t.Fatalf("fixture: the unbound branch is not ambiguous_context at blocked_wrong_branch:\n%s", out)
+	}
+	out, err = executeCmd("axi", "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "branch_sync:") {
+		t.Fatalf("an unbound branch's ambiguous_context reached status:\n%s", out)
+	}
+	out, err = executeCmd("status")
+	if err != nil {
+		t.Fatalf("human status: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "local branch:") {
+		t.Fatalf("an unbound branch's ambiguous_context reached the human status:\n%s", out)
+	}
+}
+
 type cliRecoverFixture struct {
 	local, gate, remote, base, submitted, preserved, runID, archiveRef, repoID string
 }
