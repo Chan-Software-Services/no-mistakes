@@ -32,6 +32,7 @@ func TestCaptureDoesNotCopyRepositoryHistoryPerCase(t *testing.T) {
 	// Capture's object-pool fetch would start a detached auto-maintenance
 	// whose lock file can vanish between dirSize listing it and reading its
 	// size.
+	testgit.IgnoreUserGitConfig(t)
 	trace := testgit.TraceGit(t)
 	testgit.TurnOffAutoMaintenance(t)
 	p, sourceDB, run, repo, firstRound := setupCapturedRunWithHistory(t, ctx, 24)

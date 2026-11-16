@@ -473,6 +473,7 @@ func captureGitForgeEnvironment(sctx *pipeline.StepContext) (string, error) {
 func TestPushReceivedResolvesForgeProfileIntoRunContext(t *testing.T) {
 	const credentialSentinel = "forge-secret-must-not-persist"
 	t.Setenv("GH_TOKEN", credentialSentinel)
+	testgit.IgnoreUserGitConfig(t)
 	trace := testgit.TraceGit(t)
 	testgit.TurnOffAutoMaintenance(t)
 	contexts := make(chan capturedForgeContext, 1)

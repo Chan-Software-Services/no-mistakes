@@ -77,6 +77,20 @@ func TurnOffRepoAutoMaintenance(t testing.TB, gitDir string) {
 	}
 }
 
+// IgnoreUserGitConfig points GIT_CONFIG_GLOBAL at an empty file and sets
+// GIT_CONFIG_NOSYSTEM for the rest of the test, so a contributor's own global
+// or system config (a maintenance.auto=false above all) cannot make
+// RequireNoAutoMaintenance pass with the test's own switch gone.
+func IgnoreUserGitConfig(t testing.TB) {
+	t.Helper()
+	empty := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", empty)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+}
+
 // TraceGit points GIT_TRACE2 at a new file for the rest of the test and
 // returns its path, for RequireNoAutoMaintenance to read.
 func TraceGit(t testing.TB) string {

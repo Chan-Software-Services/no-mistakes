@@ -113,12 +113,22 @@ func readFile(t *testing.T, path string) string {
 // handed any option, which is how the code under test runs git, and keeps any
 // configuration pairs already in the environment.
 func TestTurnOffAutoMaintenanceKeepsThePlainCommitOfTheProcessFromStartingMaintenance(t *testing.T) {
+	// A contributor's own maintenance.auto=false must not reach the commit,
+	// or the check below would pass without TurnOffAutoMaintenance.
+	userConfig := filepath.Join(t.TempDir(), "user-gitconfig")
+	if err := os.WriteFile(userConfig, []byte("[maintenance]\n\tauto = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", userConfig)
 	gitBin := isolatedGit(t)
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
 	t.Setenv("GIT_CONFIG_VALUE_0", "kept")
 	dir := t.TempDir()
 	run(t, gitBin, dir, "init")
+	if out, err := exec.Command(gitBin, "-C", dir, "config", "--get", "maintenance.auto").Output(); err == nil {
+		t.Fatalf("maintenance.auto = %q from the contributor's global config, want it shut out", strings.TrimSpace(string(out)))
+	}
 	trace := TraceGit(t)
 	TurnOffAutoMaintenance(t)
 
@@ -164,12 +174,7 @@ func isolatedGit(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(emptyConfig, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", emptyConfig)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	IgnoreUserGitConfig(t)
 	t.Setenv("GIT_CONFIG_COUNT", "0")
 	for _, kv := range [][2]string{
 		{"GIT_AUTHOR_NAME", "test"}, {"GIT_AUTHOR_EMAIL", "test@test.com"},

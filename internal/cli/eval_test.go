@@ -151,6 +151,7 @@ func TestEvalCaptureSetsReportAndRelabelAreIdempotentAtTheCLI(t *testing.T) {
 	chdir(t, t.TempDir())
 	// eval capture's object-pool fetch would start a detached
 	// auto-maintenance whose lock file can come and go between the two walks.
+	testgit.IgnoreUserGitConfig(t)
 	trace := testgit.TraceGit(t)
 	testgit.TurnOffAutoMaintenance(t)
 
