@@ -220,10 +220,12 @@ func hunkNewStart(header string) (int, bool) {
 // rewriteEmDashOnWrittenLines returns the edit's content with every em dash
 // on a line the step wrote replaced by a plain dash; lines it did not write,
 // such as a quoted rule, are left as they were, and so is an em dash in a
-// fenced code block or an inline code span, whose meaning is the character.
+// fenced code block, an indented code block of a .md file, or an inline code
+// span, whose meaning is the character. An .mdx file has no indented code
+// blocks, so its indented lines are text.
 func rewriteEmDashOnWrittenLines(sctx *pipeline.StepContext, edit markdownEdit, written []bool) []byte {
 	content := string(edit.after)
-	code := markdownCode(content)
+	code := markdownCodeIn(content, strings.ToLower(path.Ext(edit.path)) == ".md")
 	lines := splitLinesKeepEnds(content)
 	total, offset := 0, 0
 	for i, line := range lines {
@@ -265,16 +267,33 @@ func rewriteEmDash(line string, code []bool) (string, int) {
 	return b.String(), n
 }
 
-// markdownCode marks the bytes of content that are Markdown code: every line
-// of a fenced code block, its fences included (an unclosed fence runs to the
-// end), and every inline code span, matched across the lines of a paragraph
-// the way CommonMark matches them. Fences are found after any indentation,
-// blockquote markers or list marker, so a fence nested in a list or a quote
-// is still code.
+// markdownCode marks the bytes of content that are Markdown code, reading it
+// as a .md file does: markdownCodeIn with indented code blocks.
 func markdownCode(content string) []bool {
+	return markdownCodeIn(content, true)
+}
+
+// markdownCodeIn marks the bytes of content that are Markdown code: every line
+// of a fenced code block, its fences included (an unclosed fence runs to the
+// end), every inline code span, matched across the lines of a paragraph and
+// within an ATX heading the way CommonMark matches them, and, when
+// indentedCode, every line of an indented code block. Fences are found after
+// any indentation, blockquote markers or list marker, so a fence nested in a
+// list or a quote is still code.
+//
+// Outside a paragraph, an indented code line is a line indented at least four
+// columns past the content column of the innermost open list item that does
+// not start past it (column 0 outside a list), or a list item whose text
+// starts five or more columns after its marker. A paragraph runs from its
+// first other line to a blank line, a fence or an ATX heading, and every later
+// line in it is a lazy continuation, never code, however far it is indented. An
+// indented code block in a blockquote is not recognized, a setext heading's
+// text reads as a paragraph, and list structure is read no further than this.
+func markdownCodeIn(content string, indentedCode bool) []bool {
 	code := make([]bool, len(content))
 	fence := ""     // the open fence's marker run, "" outside a fence
 	paragraph := -1 // byte offset of the open paragraph's first line
+	var items []int // content columns of the open list items, outermost first
 	closeParagraph := func(end int) {
 		if paragraph >= 0 {
 			markCodeSpans(content[paragraph:end], code[paragraph:end])
@@ -292,18 +311,110 @@ func markdownCode(content string) []bool {
 			if closesFence(body, fence) {
 				fence = ""
 			}
+			continue
 		case openingFence(body) != "":
 			closeParagraph(start)
 			fence = openingFence(body)
 			markBytes(code[start:offset])
+			continue
 		case strings.TrimSpace(line) == "":
 			closeParagraph(start)
-		case paragraph < 0:
+			continue
+		}
+		col, rest := indentColumns(line, 0)
+		if paragraph < 0 {
+			for len(items) > 0 && items[len(items)-1] > col {
+				items = items[:len(items)-1]
+			}
+			base := 0
+			if len(items) > 0 {
+				base = items[len(items)-1]
+			}
+			if indentedCode && col >= base+4 {
+				markBytes(code[start:offset])
+				continue
+			}
+		}
+		if width, after := listMarker(rest); width > 0 {
+			if paragraph >= 0 {
+				for len(items) > 0 && items[len(items)-1] > col {
+					items = items[:len(items)-1]
+				}
+			}
+			gap, _ := indentColumns(after, col+width)
+			if gap < 1 || gap > 4 || strings.TrimSpace(after) == "" {
+				gap = 1
+			}
+			items = append(items, col+width+gap)
+			if textCol, _ := indentColumns(after, col+width); indentedCode && paragraph < 0 && textCol-gap >= 4 {
+				markBytes(code[start:offset])
+				continue
+			}
+		}
+		if atxHeading(rest) && col < 4 {
+			closeParagraph(start)
+			markCodeSpans(content[start:offset], code[start:offset])
+			continue
+		}
+		if paragraph < 0 {
 			paragraph = start
 		}
 	}
 	closeParagraph(len(content))
 	return code
+}
+
+// indentColumns returns the width in columns of the leading spaces and tabs of
+// text, a tab advancing to the next multiple of four from column at, and the
+// text after them.
+func indentColumns(text string, at int) (int, string) {
+	col := at
+	i := 0
+	for ; i < len(text); i++ {
+		if text[i] == ' ' {
+			col++
+		} else if text[i] == '\t' {
+			col += 4 - col%4
+		} else {
+			break
+		}
+	}
+	return col - at, text[i:]
+}
+
+// listMarker returns the width of the list marker text starts with (a bullet,
+// or up to nine digits and a "." or ")") when a space, a tab or the line end
+// follows it, and the text after the marker; 0 when text starts with none.
+func listMarker(text string) (int, string) {
+	width := 0
+	switch {
+	case text == "":
+		return 0, text
+	case text[0] == '-' || text[0] == '*' || text[0] == '+':
+		width = 1
+	default:
+		digits := len(text) - len(strings.TrimLeft(text, "0123456789"))
+		if digits == 0 || digits > 9 || digits >= len(text) || (text[digits] != '.' && text[digits] != ')') {
+			return 0, text
+		}
+		width = digits + 1
+	}
+	after := text[width:]
+	if strings.TrimRight(after, "\r\n") != "" && after[0] != ' ' && after[0] != '\t' {
+		return 0, text
+	}
+	return width, after
+}
+
+// atxHeading reports whether text, a line after its indentation, is an ATX
+// heading: one to six "#" and then a space, a tab or the line end.
+func atxHeading(text string) bool {
+	run := len(text) - len(strings.TrimLeft(text, "#"))
+	if run < 1 || run > 6 {
+		return false
+	}
+	after := strings.TrimRight(text[run:], "\r\n")
+	return after == "" || after[0] == ' ' || after[0] == '\t'
 }
 
 func markBytes(code []bool) {
@@ -352,9 +463,10 @@ func closesFence(body, marker string) bool {
 	return len(body) >= len(marker) && strings.Trim(body, marker[:1]) == ""
 }
 
-// markCodeSpans marks the inline code spans of one paragraph: a backtick run
-// opens a span that the next run of exactly the same length closes, a run
-// with no closer is literal, and a backslash-escaped backtick opens nothing.
+// markCodeSpans marks the inline code spans of one paragraph or heading: a
+// backtick run opens a span that the next run of exactly the same length
+// closes, a run with no closer is literal, and a backslash-escaped backtick
+// opens nothing.
 func markCodeSpans(text string, code []bool) {
 	for i := 0; i < len(text); {
 		switch text[i] {
