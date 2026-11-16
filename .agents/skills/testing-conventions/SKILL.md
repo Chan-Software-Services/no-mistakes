@@ -9,7 +9,7 @@ metadata:
 **Testing Conventions**
 
 - Prefer e2e tests for behavior that crosses a process or I/O boundary (CLI flags, config loading, git operations, agent spawning, daemon coordination, stdout/stderr, recorded fixtures); unit-test pure helpers where speed and failure localization matter. Prefer creating real git repos in temp dirs over heavy mocking.
-- The e2e suite is behind the `e2e` build tag; `make e2e` runs `scripts/e2e.sh`, which sweeps `./internal/e2e/...` and `./internal/pipeline/steps/...` in one process under a 720s cap, so keep new step-local e2e tests behind the tag too.
+- The e2e suite is behind the `e2e` build tag; `make e2e` runs `scripts/e2e.sh`, which sweeps `./internal/e2e/...` and `./internal/pipeline/steps/...` in one `go test` run under a 720s cap, so keep new step-local e2e tests behind the tag too.
 - `internal/e2e` tests cannot use `t.Parallel` (each harness sets process-wide env with `t.Setenv`), so CI splits the package across runners instead: `scripts/e2e.sh --shard <i>/<n>` runs every n-th top-level test in name order from `go test -list`, and shard 1 also runs the steps packages, each `go test` under a 480s cap.
   The shard is the top-level test, so a new journey worth more than a few percent of the package's time is its own top-level test, as `TestUserJourney<Agent>` is one per agent.
   Regressions: `TestE2EScriptShardsDealEveryTestOnce` and the other `TestE2EScript*` tests.

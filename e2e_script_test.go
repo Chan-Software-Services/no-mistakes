@@ -101,7 +101,7 @@ func runPattern(t *testing.T, line string) []string {
 	return strings.Split(strings.TrimSuffix(strings.TrimPrefix(pattern, "^("), ")$"), "|")
 }
 
-// With no arguments the script runs the whole suite in one process, as local
+// With no arguments the script runs the whole suite in one `go test` run, as local
 // `make e2e` and the project's local checks do, under a cap half again over
 // CI's slowest whole-package run.
 func TestE2EScriptRunsTheWholeSuiteByDefault(t *testing.T) {
