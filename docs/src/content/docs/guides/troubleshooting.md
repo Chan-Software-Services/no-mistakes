@@ -339,20 +339,26 @@ Start a new run only after abort confirms the terminal state; see the [abort com
 
 Symptom: `~/.no-mistakes/worktrees/<repoID>/<runID>/` - or `<root>/<runID>` when the repository has a [configured worktree root](/no-mistakes/reference/global-config/#worktree_roots) - sticks around after a run ends.
 
-The daemon's [retention rules](/no-mistakes/concepts/daemon/#what-it-does) and [crash-recovery checks](/no-mistakes/concepts/daemon/#crash-recovery) can deliberately keep a worktree after a run ends. Inspect retained work before considering removal; for a protected-path refusal, follow the [resolution guidance](/no-mistakes/reference/repo-config/#protected_paths). Only remove a leftover after deciding its contents can be discarded:
+The daemon's [retention rules](/no-mistakes/concepts/daemon/#what-it-does) and [crash-recovery checks](/no-mistakes/concepts/daemon/#crash-recovery) can deliberately keep a worktree after a run ends.
+Inspect retained work before considering removal; for a protected-path refusal, follow the [resolution guidance](/no-mistakes/reference/repo-config/#protected_paths).
+Only remove a leftover after deciding its contents can be discarded.
 
-```sh
-# From inside the repo the worktree belongs to:
-git worktree list
-git worktree remove --force <path>
-```
-
-Otherwise, eligible orphan worktrees are cleaned on the next startup, subject to those same retention rules:
+Restarting the daemon is the safe way to remove one: eligible orphan worktrees are cleaned on startup, subject to those same retention rules, in an order that does not disturb a push to the same repository.
 
 ```sh
 no-mistakes daemon stop
 no-mistakes daemon start
 ```
+
+To remove a worktree the restart keeps, after deciding its contents can be discarded, use git on the gate repository the worktree belongs to (`~/.no-mistakes/repos/<id>.git`), not on your own checkout:
+
+```sh
+git --git-dir="$HOME/.no-mistakes/repos/<id>.git" worktree list
+git --git-dir="$HOME/.no-mistakes/repos/<id>.git" worktree remove --force <path>
+```
+
+Run it only while no push to that repository is in flight and no run is starting: `git worktree remove` deletes the worktree's registration file by file, and a push that reads it half-deleted fails with `failed to read worktrees/<id>/commondir`.
+A push that failed this way is safe to repeat.
 
 ## Reset everything
 
