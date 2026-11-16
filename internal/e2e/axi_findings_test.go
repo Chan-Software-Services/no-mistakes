@@ -15,8 +15,8 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-// longReviewFindingDescription is a review finding as long as T224's (669
-// characters), past the gate's 600-character cut, with the commas and quotes
+// longReviewFindingDescription is a review finding as long as a recorded one
+// a worker could not read whole (669 characters), past the gate's 600-character cut, with the commas and quotes
 // a real description carries so the TOON row has to quote it.
 func longReviewFindingDescription(t *testing.T) string {
 	t.Helper()
@@ -103,9 +103,9 @@ type axiFindingRowsDoc struct {
 	} `toon:"findings"`
 }
 
-// TestAxiFindingsPrintsALongFindingWholeJourney models T224: a worker who may
-// not read the gate's directory was shown a 669-character finding cut at 600
-// characters, and no gate command printed it whole. The run parks on such a
+// TestAxiFindingsPrintsALongFindingWholeJourney models a worker who may not
+// read the gate's directory and was shown a 669-character finding cut at 600
+// characters, with no gate command to print it whole. The run parks on such a
 // finding, the gate points at `axi findings`, and that command reads the
 // finding back byte for byte, then the Test step's recorded verdict.
 func TestAxiFindingsPrintsALongFindingWholeJourney(t *testing.T) {

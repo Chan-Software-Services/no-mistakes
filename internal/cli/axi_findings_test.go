@@ -132,9 +132,10 @@ func insertBranchRun(t *testing.T, database *db.DB, repo *db.Repo, branch string
 	return r
 }
 
-// t224Description is as long as the finding T224 could not read (669
-// characters), with the commas and quotes a real description carries.
-func t224Description(t *testing.T) string {
+// longFindingDescription is as long as a recorded finding a worker could not
+// read whole (669 characters), with the commas and quotes a real description
+// carries.
+func longFindingDescription(t *testing.T) string {
 	t.Helper()
 	const sentence = "The loader reads \"flags.enabled\" before the config file is parsed, so a missing file leaves it nil; "
 	desc := strings.Repeat(sentence, 7)[:668] + "."
@@ -149,7 +150,7 @@ func TestAxiFindingsPrintsALongFindingWhole(t *testing.T) {
 	run(t, repoDir, "git", "checkout", "-b", "feature/mine")
 	chdir(t, repoDir)
 
-	description := t224Description(t)
+	description := longFindingDescription(t)
 	summary := strings.Repeat("a summary longer than the gate shows, ", 40)
 	mine := insertBranchRun(t, database, repo, "feature/mine", types.RunRunning)
 	insertStepWithFindings(t, database, mine.ID, types.StepReview, types.StepStatusAwaitingApproval, &types.Findings{

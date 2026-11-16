@@ -51,45 +51,18 @@ func newAxiFindingsCmd() *cobra.Command {
 // runAxiFindings prints a step's recorded findings with nothing cut, for a
 // worker that may not read the gate's directory: the gate's own output cuts a
 // summary at maxGateSummary and a description at maxFindingDesc. It resolves
-// its run exactly as `axi logs` does and reads the step's current
-// findings_json from the database, as status does. It is a read-only query:
-// it does not emit telemetry, and it is not pipeline control.
+// its run through resolveAxiStepRun, the front it shares with `axi logs`, and
+// reads the step's current findings_json from the database, as status does.
+// It is a read-only query: it does not emit telemetry, and it is not pipeline
+// control.
 func runAxiFindings(cmd *cobra.Command, step, runID string) error {
 	step = strings.TrimSpace(step)
-	if step == "" {
-		return emitError(cmd, 2, "--step is required", validLogStepsHelp)
-	}
-	if !validReadableStep(types.StepName(step)) {
-		return emitError(cmd, 2, fmt.Sprintf("unknown step %q", step), validLogStepsHelp)
-	}
-
-	env, err := openAxiQueryEnv(runID)
+	env, run, err := resolveAxiStepRun(cmd, "findings", step, runID)
 	if err != nil {
-		return emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
+		return err
 	}
 	defer env.close()
 
-	branch, branchErr := currentBranchForRunResolve(cmd.Context())
-	if branchErr != nil && runID == "" {
-		return emitError(cmd, 1, branchErr.Error())
-	}
-	run, _, err := resolveRun(env, runID, branch)
-	if err != nil {
-		return emitError(cmd, 1, err.Error())
-	}
-	if run == nil {
-		if runID != "" {
-			return emitError(cmd, 1, fmt.Sprintf("run %q not found", runID))
-		}
-		help := []string{
-			startRunHelp(),
-			"To read another branch's run, name it: `no-mistakes axi findings --run <id> --step <step>`",
-		}
-		if branch == "" {
-			help = []string{"This worktree has no current branch (detached HEAD), so no run can be attributed to it; inspect a specific run with `no-mistakes axi findings --run <id> --step <step>`, or check out a branch first"}
-		}
-		return emitError(cmd, 1, "no run found for this branch to read findings from", help...)
-	}
 	stepResults, err := env.d.GetStepsByRun(run.ID)
 	if err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("load steps: %v", err))
