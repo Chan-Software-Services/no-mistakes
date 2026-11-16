@@ -758,10 +758,10 @@ func cachedBranchSyncField(ctxCmd *cobra.Command, runID string) *toON.Field {
 
 // relevantCachedSyncState decides which cached branch-sync states the status
 // surfaces show. ambiguous_context stays out except at blocked_relation_unknown:
-// its other safeties (a branch no run is bound to, which is every new branch
-// before its first run, a detached HEAD, a directory outside the registered
-// repository, a duplicate checkout, an unverifiable gate context) are not a
-// branch sync to act on. blocked_relation_unknown is: the local head left the
+// its other safeties (a branch no run is bound to, as is every new branch in
+// a repository that already has runs, a detached HEAD, a directory outside the
+// registered repository, a duplicate checkout, an unverifiable gate context)
+// are not a branch sync to act on. blocked_relation_unknown is: the local head left the
 // submitted head and the pushed head is not in the local object store, so its
 // note, the operator's replace-published sentence when that applies, and its
 // check_sync next action must reach an agent reading status.
