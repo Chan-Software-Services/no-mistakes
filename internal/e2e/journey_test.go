@@ -21,7 +21,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-// TestUserJourney is the consolidated end-to-end test. It walks through
+// TestUserJourney<Agent> is the consolidated end-to-end test. It walks through
 // the full pipeline once per agent, exercising:
 //
 //   - `no-mistakes init` (gate setup, daemon bootstrap, post-receive
@@ -39,20 +39,19 @@ import (
 // because no commands are configured; they delegate to the agent which
 // returns the canned "no findings" response.
 //
-// Adding more journeys: append subtests here rather than spawning new
-// test files. The harness setup is the expensive part; reusing it across
-// scenarios keeps the suite tight.
-func TestUserJourney(t *testing.T) {
-	// Subtests run sequentially: each one calls t.Setenv to point env
-	// vars at its own temp dirs, and t.Setenv is incompatible with
-	// t.Parallel. Keep the package timeout sized for all serial runs.
-	for _, agentName := range []string{"claude", "codex", "grok", "opencode", "antigravity"} {
-		agentName := agentName
-		t.Run(agentName, func(t *testing.T) {
-			runHappyPath(t, agentName)
-		})
-	}
-}
+// Adding more journeys: add assertions to runHappyPath rather than
+// spawning new test files. The harness setup is the expensive part;
+// reusing it across scenarios keeps the suite tight.
+//
+// Each agent is its own top-level test, not a subtest, so scripts/e2e.sh
+// --shard can deal the five out across CI runners: together they are about
+// a third of the package's time. They run one at a time within a process,
+// since each calls t.Setenv, which t.Parallel refuses.
+func TestUserJourneyClaude(t *testing.T)      { runHappyPath(t, "claude") }
+func TestUserJourneyCodex(t *testing.T)       { runHappyPath(t, "codex") }
+func TestUserJourneyGrok(t *testing.T)        { runHappyPath(t, "grok") }
+func TestUserJourneyOpencode(t *testing.T)    { runHappyPath(t, "opencode") }
+func TestUserJourneyAntigravity(t *testing.T) { runHappyPath(t, "antigravity") }
 
 func TestAXIControlByteFailureGateRemainsReadable(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: cleanReviewScenario(t)})

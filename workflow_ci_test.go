@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,10 +21,39 @@ type ciWorkflow struct {
 
 type ciWorkflowJob struct {
 	Name        string         `yaml:"name"`
+	Needs       any            `yaml:"needs"`
+	If          string         `yaml:"if"`
 	Permissions any            `yaml:"permissions"`
 	RunsOn      any            `yaml:"runs-on"`
 	Strategy    map[string]any `yaml:"strategy"`
 	Steps       []wfStep       `yaml:"steps"`
+}
+
+// e2eShardJob is the one job allowed a matrix: it fans the e2e suite out over
+// shards of one Linux runner each, never over platforms.
+const e2eShardJob = "e2e-shard"
+
+// e2eShards returns the shard job's matrix values, failing unless the matrix
+// is exactly `shard: [1, 2, ..., n]`.
+func e2eShards(t *testing.T, job ciWorkflowJob) []int {
+	t.Helper()
+	matrix, ok := job.Strategy["matrix"].(map[string]any)
+	if !ok || len(matrix) != 1 {
+		t.Fatalf("%s matrix = %v, want exactly one key, shard", e2eShardJob, job.Strategy["matrix"])
+	}
+	raw, ok := matrix["shard"].([]any)
+	if !ok || len(raw) == 0 {
+		t.Fatalf("%s matrix = %v, want shard: [1, ..., n]", e2eShardJob, matrix)
+	}
+	shards := make([]int, len(raw))
+	for i, v := range raw {
+		n, ok := v.(int)
+		if !ok || n != i+1 {
+			t.Fatalf("%s matrix shard = %v, want 1 to n in order", e2eShardJob, raw)
+		}
+		shards[i] = n
+	}
+	return shards
 }
 
 func loadCIWorkflow(t *testing.T) ciWorkflow {
@@ -40,8 +70,9 @@ func loadCIWorkflow(t *testing.T) ciWorkflow {
 }
 
 // The CI workflow runs on Linux only: exactly the check, test (ubuntu-latest)
-// and e2e checks, each on a single ubuntu-latest runner with no matrix that
-// could fan a job back out to macOS or Windows.
+// and e2e checks, plus the e2e shards the e2e check rolls up, each on a single
+// ubuntu-latest runner. The only matrix is the shard job's, over shard alone,
+// so none can fan a job back out to macOS or Windows.
 func TestCIWorkflowRunsOnLinuxOnly(t *testing.T) {
 	t.Parallel()
 
@@ -52,18 +83,69 @@ func TestCIWorkflowRunsOnLinuxOnly(t *testing.T) {
 		if name == "" {
 			name = id
 		}
-		checks = append(checks, name)
-		if job.Strategy != nil {
-			t.Errorf("job %q has a strategy %v; CI jobs run on one Linux runner, never a matrix", id, job.Strategy)
+		if id == e2eShardJob {
+			for _, shard := range e2eShards(t, job) {
+				checks = append(checks, strings.ReplaceAll(name, "${{ matrix.shard }}", fmt.Sprint(shard)))
+			}
+		} else {
+			checks = append(checks, name)
+			if job.Strategy != nil {
+				t.Errorf("job %q has a strategy %v; only %s fans out, over shards", id, job.Strategy, e2eShardJob)
+			}
 		}
 		if runsOn, ok := job.RunsOn.(string); !ok || runsOn != "ubuntu-latest" {
 			t.Errorf("job %q runs-on = %v, want ubuntu-latest", id, job.RunsOn)
 		}
 	}
 	slices.Sort(checks)
-	want := []string{"check", "e2e", "test (ubuntu-latest)"}
+	want := []string{"check", "e2e", "e2e shard 1/3", "e2e shard 2/3", "e2e shard 3/3", "test (ubuntu-latest)"}
 	if !slices.Equal(checks, want) {
 		t.Fatalf("CI checks = %v, want %v", checks, want)
+	}
+}
+
+// Each e2e shard runs its share through scripts/e2e.sh with the matrix's own
+// count, every shard reports even when another fails, and the e2e check runs
+// after them all, whatever they concluded, and passes only when every one
+// passed: a skipped roll-up, or one that read a single shard, would let a red
+// shard through.
+func TestCIWorkflowE2EShardsRollUpIntoTheE2ECheck(t *testing.T) {
+	t.Parallel()
+
+	wf := loadCIWorkflow(t)
+	shardJob, ok := wf.Jobs[e2eShardJob]
+	if !ok {
+		t.Fatalf("CI workflow has no %s job", e2eShardJob)
+	}
+	count := len(e2eShards(t, shardJob))
+	if want := fmt.Sprintf("e2e shard ${{ matrix.shard }}/%d", count); shardJob.Name != want {
+		t.Errorf("%s name = %q, want %q", e2eShardJob, shardJob.Name, want)
+	}
+	if ff, ok := shardJob.Strategy["fail-fast"].(bool); !ok || ff {
+		t.Errorf("%s fail-fast = %v, want false so every shard reports", e2eShardJob, shardJob.Strategy["fail-fast"])
+	}
+	var runs []string
+	for _, step := range shardJob.Steps {
+		if run := strings.TrimSpace(step.Run); run != "" {
+			runs = append(runs, run)
+		}
+	}
+	if want := []string{fmt.Sprintf("bash scripts/e2e.sh --shard ${{ matrix.shard }}/%d", count)}; !slices.Equal(runs, want) {
+		t.Errorf("%s commands = %q, want %q", e2eShardJob, runs, want)
+	}
+
+	rollup, ok := wf.Jobs["e2e"]
+	if !ok {
+		t.Fatal("CI workflow has no e2e job")
+	}
+	if rollup.Needs != e2eShardJob {
+		t.Errorf("e2e needs = %v, want %s", rollup.Needs, e2eShardJob)
+	}
+	if rollup.If != "always()" {
+		t.Errorf("e2e if = %q, want always() so a failed or cancelled shard still fails the check", rollup.If)
+	}
+	if len(rollup.Steps) != 1 || rollup.Steps[0].Env["SHARDS"] != "${{ needs.e2e-shard.result }}" || strings.TrimSpace(rollup.Steps[0].Run) != `test "$SHARDS" = success` {
+		t.Errorf("e2e steps = %+v, want one step testing needs.e2e-shard.result is success", rollup.Steps)
 	}
 }
 
