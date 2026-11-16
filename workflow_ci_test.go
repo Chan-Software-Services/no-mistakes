@@ -84,11 +84,11 @@ func TestCIWorkflowRunsOnLinuxOnly(t *testing.T) {
 			name = id
 		}
 		if id == e2eShardJob {
-			for _, shard := range e2eShards(t, job) {
-				shards := len(e2eShards(t, job))
+			shards := e2eShards(t, job)
+			for _, shard := range shards {
 				checks = append(checks, strings.NewReplacer(
 					"${{ matrix.shard }}", fmt.Sprint(shard),
-					"${{ strategy.job-total }}", fmt.Sprint(shards),
+					"${{ strategy.job-total }}", fmt.Sprint(len(shards)),
 				).Replace(name))
 			}
 		} else {
@@ -109,10 +109,11 @@ func TestCIWorkflowRunsOnLinuxOnly(t *testing.T) {
 }
 
 // Each e2e shard runs its share through scripts/e2e.sh with the matrix's own
-// length as the count (strategy.job-total, so the count is written once), every shard reports even when another fails, and the e2e check runs
-// after them all, whatever they concluded, and passes only when every one
-// passed: a skipped roll-up, or one that read a single shard, would let a red
-// shard through.
+// length as the count (strategy.job-total, so the count is written once),
+// every shard reports even when another fails, and the e2e check runs after
+// them all, whatever they concluded, and passes only when every one passed: a
+// skipped roll-up, or one that read a single shard, would let a red shard
+// through.
 func TestCIWorkflowE2EShardsRollUpIntoTheE2ECheck(t *testing.T) {
 	t.Parallel()
 
