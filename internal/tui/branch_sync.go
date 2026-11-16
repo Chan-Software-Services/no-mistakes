@@ -71,7 +71,9 @@ func renderLocalBranchStatus(state *branchsync.State, refreshing bool, width int
 			return ""
 		}
 	}
-	if width < 40 {
+	// The box takes the width of the Pipeline box above it, whose default
+	// this is, so it fits the responsive layout's narrower left column.
+	if width < 20 {
 		width = 80
 	}
 	return renderBoxWithFooter("Local branch", wrapBoxContent(message, width), width, footer)
@@ -118,19 +120,16 @@ func archiveKeepLocalRecovery(state *branchsync.State) bool {
 }
 
 func renderRecoverConfirmation(state branchsync.State, width int) string {
-	if width < 40 {
+	if width < 20 {
 		width = 80
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "The run ended %s without publishing its pipeline commits.\n", state.Pipeline.Status)
+	// Each paragraph is one line, which wrapBoxContent wraps to the box.
+	fmt.Fprintf(&b, "The run ended %s without publishing its pipeline commits. ", state.Pipeline.Status)
 	if archiveKeepLocalRecovery(&state) {
-		fmt.Fprintf(&b, "A verified archive preserves the divergent later head. Recovery keeps the\n")
-		fmt.Fprintf(&b, "working branch at the exact required head and returns custody through the\n")
-		fmt.Fprintf(&b, "guarded keep-local path. It never selects or replays the archive.\n\n")
+		b.WriteString("A verified archive preserves the divergent later head. Recovery keeps the working branch at the exact required head and returns custody through the guarded keep-local path. It never selects or replays the archive.\n\n")
 	} else {
-		fmt.Fprintf(&b, "Recovery returns custody by fast-forwarding a clean behind worktree, or by\n")
-		fmt.Fprintf(&b, "adopting a diverged preserved head only when it is proven to carry every\n")
-		fmt.Fprintf(&b, "local change.\n\n")
+		b.WriteString("Recovery returns custody by fast-forwarding a clean behind worktree, or by adopting a diverged preserved head only when it is proven to carry every local change.\n\n")
 	}
 	fmt.Fprintf(&b, "Local branch:   %s\n", state.Local.Branch)
 	fmt.Fprintf(&b, "Local HEAD:     %s\n", state.Local.Head)
@@ -146,15 +145,14 @@ func renderRecoverConfirmation(state branchsync.State, width int) string {
 }
 
 func renderSyncConfirmation(state branchsync.State, width int) string {
-	if width < 40 {
+	if width < 20 {
 		width = 80
 	}
 	var b strings.Builder
 	if state.Safety == branchsync.SafetySafeEquivalentAdvance {
-		fmt.Fprintf(&b, "Only this clean checked-out branch can advance to an equivalent live pipeline head.\n")
-		fmt.Fprintf(&b, "The current local head is anchored before the branch moves.\n\n")
+		b.WriteString("Only this clean checked-out branch can advance to an equivalent live pipeline head. The current local head is anchored before the branch moves.\n\n")
 	} else {
-		fmt.Fprintf(&b, "Only this clean checked-out branch can advance by a strict fast-forward.\n\n")
+		b.WriteString("Only this clean checked-out branch can advance by a strict fast-forward.\n\n")
 	}
 	fmt.Fprintf(&b, "Local branch: %s\n", state.Local.Branch)
 	fmt.Fprintf(&b, "Local HEAD:   %s\n", state.Local.Head)

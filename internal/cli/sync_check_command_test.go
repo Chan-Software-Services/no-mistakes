@@ -189,3 +189,51 @@ func TestAxiSyncCheckNamesAxiCheckWhenFetchFails(t *testing.T) {
 		t.Errorf("human sync --check names an axi command:\n%s", out)
 	}
 }
+
+func TestAxiSyncCheckNamesAxiCheckWhenTheRemoteChangesDuringTheRefresh(t *testing.T) {
+	f := newCLISyncFixture(t)
+	// The remote branch moves between the refresh's ls-remote and its fetch:
+	// a reference-transaction hook rewrites the run's private sync ref to
+	// another commit as soon as the fetch commits it, so the fetched head no
+	// longer equals the one ls-remote saw.
+	hooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hook := "#!/bin/sh\n" +
+		"[ \"$1\" = committed ] || exit 0\n" +
+		"[ -z \"$NM_TEST_REF_MOVED\" ] || exit 0\n" +
+		"while read -r old new ref; do\n" +
+		"  case \"$ref\" in refs/no-mistakes/sync/*)\n" +
+		"    [ \"$new\" = 0000000000000000000000000000000000000000 ] || NM_TEST_REF_MOVED=1 git update-ref \"$ref\" " + f.old + " ;;\n" +
+		"  esac\n" +
+		"done\n"
+	if err := os.WriteFile(filepath.Join(hooks, "reference-transaction"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cliGit(t, f.local, "config", "core.hooksPath", hooks)
+
+	out, _ := executeCmd("axi", "sync", "--check")
+	if !strings.Contains(out, "safety: blocked_remote_changed_during_refresh") {
+		t.Fatalf("fixture: axi sync --check did not report the remote changing during the refresh:\n%s", out)
+	}
+	assertAgentNextAction(t, "axi sync --check", out, "retry")
+	if want := "Run `" + agentCheckSyncCommand + "`"; !strings.Contains(out, want) {
+		t.Errorf("axi sync --check help missing %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "command: no-mistakes axi sync\n") {
+		t.Errorf("axi sync --check still offers the cached sync command:\n%s", out)
+	}
+
+	out, _ = executeCmd("axi", "sync")
+	if !strings.Contains(out, "safety: blocked_remote_changed_during_refresh") {
+		t.Fatalf("fixture: axi sync did not report the remote changing during the refresh:\n%s", out)
+	}
+	assertAgentNextAction(t, "axi sync", out, "retry")
+	if want := "Run `" + agentCheckSyncCommand + "`"; !strings.Contains(out, want) {
+		t.Errorf("axi sync help missing %q:\n%s", want, out)
+	}
+	if got := cliGit(t, f.local, "rev-parse", "HEAD"); got != f.old {
+		t.Fatalf("axi sync moved HEAD to %s on a remote that changed during the refresh", got)
+	}
+}
