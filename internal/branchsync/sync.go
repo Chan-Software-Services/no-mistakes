@@ -361,6 +361,7 @@ func (s *Service) Refresh(ctx context.Context) State {
 		state.State = StateOffline
 		state.Safety = "blocked_offline"
 		state.Error = "could not fetch the configured push target; no files or worktree refs were changed"
+		state.NextAction = &NextAction{Code: "retry", Command: AgentCheckCommand}
 		return state
 	}
 	fetched, err := git.Run(ctx, s.workDir(), "rev-parse", privateRef)

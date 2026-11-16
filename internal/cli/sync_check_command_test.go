@@ -153,3 +153,39 @@ func TestAxiSyncCheckNamesAxiCheckWhenOffline(t *testing.T) {
 		t.Errorf("human sync --check names an axi command:\n%s", out)
 	}
 }
+
+func TestAxiSyncCheckNamesAxiCheckWhenFetchFails(t *testing.T) {
+	f := newCLISyncFixture(t)
+	// The configured push target answers its ls-remote, but the fetch into the
+	// run's private sync ref fails: a ref nested under that name leaves no
+	// room for it, so git refuses the update and the refresh reports
+	// blocked_offline at the fetch.
+	cliGit(t, f.local, "update-ref", "refs/no-mistakes/sync/"+f.runID+"/blocker", f.old)
+
+	out, _ := executeCmd("axi", "sync", "--check")
+	if !strings.Contains(out, "state: "+branchsync.StateOffline) || !strings.Contains(out, "safety: blocked_offline") ||
+		!strings.Contains(out, "could not fetch the configured push target") {
+		t.Fatalf("fixture: axi sync --check did not report the fetch failure:\n%s", out)
+	}
+	assertAgentNextAction(t, "axi sync --check", out, "retry")
+	if want := "Run `" + agentCheckSyncCommand + "`"; !strings.Contains(out, want) {
+		t.Errorf("axi sync --check help missing %q:\n%s", want, out)
+	}
+
+	out, _ = executeCmd("axi", "sync")
+	if !strings.Contains(out, "could not fetch the configured push target") {
+		t.Fatalf("fixture: axi sync did not report the fetch failure:\n%s", out)
+	}
+	assertAgentNextAction(t, "axi sync", out, "retry")
+	if want := "Run `" + agentCheckSyncCommand + "`"; !strings.Contains(out, want) {
+		t.Errorf("axi sync help missing %q:\n%s", want, out)
+	}
+
+	out, err := executeCmd("sync", "--check")
+	if err == nil || !strings.Contains(out, "could not fetch the configured push target") {
+		t.Fatalf("fixture: human sync --check did not report the fetch failure (err %v):\n%s", err, out)
+	}
+	if strings.Contains(out, "axi sync") {
+		t.Errorf("human sync --check names an axi command:\n%s", out)
+	}
+}
