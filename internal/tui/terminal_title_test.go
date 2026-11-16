@@ -1,9 +1,15 @@
 package tui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle"
+	"github.com/kunchenguid/no-mistakes/internal/termtitle/termtitletest"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -265,46 +271,185 @@ func TestTerminalTitle_FixingStep(t *testing.T) {
 	}
 }
 
-func TestView_ContainsTerminalTitleEscape(t *testing.T) {
-	configureTUIColors()
-	run := testRun()
-	run.Steps[0].Status = types.StepStatusRunning
-	m := NewModel("/tmp/sock", nil, run)
-	m.width = 80
-	m.height = 40
-	view := m.View()
-	// The view should start with the OSC title-setting escape sequence.
-	if !strings.HasPrefix(view, "\033]2;") {
-		t.Errorf("expected view to start with OSC title escape, got prefix: %q", view[:min(len(view), 40)])
-	}
-	if !strings.Contains(view, "\007") {
-		t.Error("expected view to contain BEL terminator for OSC sequence")
+// titleStates is one model per kind of terminal title, so a test that runs
+// over it covers every title the TUI can set.
+func titleStates() map[string]func() Model {
+	return map[string]func() Model{
+		"pending": func() Model { return NewModel("", nil, testRun()) },
+		"running": func() Model {
+			run := testRun()
+			run.Steps[0].Status = types.StepStatusRunning
+			return NewModel("", nil, run)
+		},
+		"awaiting approval": func() Model {
+			run := testRun()
+			run.Steps[0].Status = types.StepStatusAwaitingApproval
+			return NewModel("", nil, run)
+		},
+		"checks passed": func() Model {
+			run := testRunWithCI()
+			run.Steps[5].Status = types.StepStatusRunning
+			run.CIReady = true
+			return NewModel("", nil, run)
+		},
+		"completed": func() Model {
+			run := testRun()
+			run.Status = types.RunCompleted
+			return NewModel("", nil, run)
+		},
+		"failed": func() Model {
+			run := testRun()
+			run.Status = types.RunFailed
+			return NewModel("", nil, run)
+		},
+		"cancelled": func() Model {
+			run := testRun()
+			run.Status = types.RunCancelled
+			return NewModel("", nil, run)
+		},
+		"CI monitor interrupted": func() Model {
+			run := testRun()
+			run.Status = types.RunCIMonitorInterrupted
+			return NewModel("", nil, run)
+		},
 	}
 }
 
-func TestView_ResponsiveLayoutContainsTerminalTitleEscape(t *testing.T) {
+// TestView_FirstLineKeepsTheTerminalWidthInEveryTitleState measures each
+// frame's lines as bubbletea's renderer does, escape sequences and all, in the
+// stacked layout and in the wide layout at 105 and 119 columns. The renderer
+// cuts a line it measures wider than the terminal, and x/ansi counts the rest
+// of a title OSC sequence after a ✓ or ✗ as visible columns (see package
+// termtitle), so a title written into the frame cut its first line short.
+func TestView_FirstLineKeepsTheTerminalWidthInEveryTitleState(t *testing.T) {
 	configureTUIColors()
-	run := testRun()
-	run.Steps[0].Status = types.StepStatusRunning
-	m := NewModel("/tmp/sock", nil, run)
-	m.width = 120
-	m.height = 40
-	view := m.View()
-	if !strings.HasPrefix(view, "\033]2;") {
-		t.Errorf("expected responsive view to start with OSC title escape, got prefix: %q", view[:min(len(view), 40)])
-	}
-	if !strings.Contains(view, "\007") {
-		t.Error("expected responsive view to contain BEL terminator for OSC sequence")
+	for name, model := range titleStates() {
+		for _, width := range []int{80, 105, 119} {
+			m := model()
+			m.width = width
+			m.height = 40
+			m.logs = []string{"log line"}
+			view := m.View()
+			if strings.Contains(view, "\x1b]") {
+				t.Errorf("%s at %d columns: the frame carries an OSC sequence: %q", name, width, view)
+			}
+			lines := strings.Split(view, "\n")
+			for i, line := range lines {
+				got := ansi.StringWidth(line)
+				if got > width || (i == 0 && got != width) {
+					t.Errorf("%s at %d columns: line %d measures %d columns: %q", name, width, i, got, line)
+				}
+			}
+		}
 	}
 }
 
-func TestView_QuittingDoesNotBlankTerminalTitle(t *testing.T) {
-	configureTUIColors()
+// startedModel runs Init's title command and delivers its confirmation, as
+// bubbletea does when the program starts, and returns the title Init set.
+func startedModel(t *testing.T, m Model) (Model, string) {
+	t.Helper()
+	got := termtitletest.Run(m.Init())
+	if len(got.Titles) != 1 || got.Confirmations != 1 {
+		t.Fatalf("Init did %+v, want one title and its confirmation", got)
+	}
+	next, cmd := m.Update(termtitle.SetMsg{})
+	if titles := termtitletest.Run(cmd).Titles; len(titles) != 0 {
+		t.Fatalf("the confirmation of an unchanged title set titles %q", titles)
+	}
+	return next.(Model), got.Titles[0]
+}
+
+func TestInit_SetsTheTitleOfEveryState(t *testing.T) {
+	for name, model := range titleStates() {
+		m := model()
+		_, title := startedModel(t, m)
+		if want := m.terminalTitle(); title != want {
+			t.Errorf("%s: Init set the title %q, want %q", name, title, want)
+		}
+	}
+}
+
+func TestUpdate_SetsTheTitleWhenItChanges(t *testing.T) {
 	run := testRun()
-	m := NewModel("/tmp/sock", nil, run)
-	m.quitting = true
-	view := m.View()
-	if strings.Contains(view, "\033]2;") {
-		t.Errorf("expected quitting view to avoid sending a terminal title sequence, got: %q", view)
+	run.Steps[0].Status = types.StepStatusRunning
+	m, title := startedModel(t, NewModel("", nil, run))
+	if title != "⠋ Review - feature/foo" {
+		t.Fatalf("Init set the title %q", title)
+	}
+
+	// A message that leaves the title as it is sets no title.
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	if titles := termtitletest.Run(cmd).Titles; len(titles) != 0 {
+		t.Fatalf("an unchanged title was set again: %q", titles)
+	}
+	m = next.(Model)
+
+	// The spinner's next frame changes the title.
+	next, cmd = m.Update(spinnerTickMsg{})
+	if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{"⠙ Review - feature/foo"}) || got.Confirmations != 1 {
+		t.Fatalf("spinner tick did %+v, want the next frame's title and its confirmation", got)
+	}
+	m = next.(Model)
+
+	// Until that title is confirmed, a later change waits.
+	next, cmd = m.Update(eventMsg{subscriptionID: m.subscriptionID, event: ipc.Event{
+		Type: ipc.EventRunCompleted, RunID: run.ID, Status: ptr(string(types.RunCompleted)), StateRev: 2,
+	}})
+	if titles := termtitletest.Run(cmd).Titles; len(titles) != 0 {
+		t.Fatalf("a title was set while another was in flight: %q", titles)
+	}
+	m = next.(Model)
+
+	// The confirmation sends the latest title.
+	next, cmd = m.Update(termtitle.SetMsg{})
+	if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{"✓ Completed - feature/foo"}) || got.Confirmations != 1 {
+		t.Fatalf("the confirmation did %+v, want the completed title and its confirmation", got)
+	}
+	m = next.(Model)
+	next, cmd = m.Update(termtitle.SetMsg{})
+	if titles := termtitletest.Run(cmd).Titles; len(titles) != 0 {
+		t.Fatalf("the confirmation of the latest title set titles %q", titles)
+	}
+}
+
+func TestQuit_ClearsTheTitleBeforeItQuits(t *testing.T) {
+	for _, key := range []string{"q", "ctrl+c"} {
+		run := testRun()
+		run.Steps[0].Status = types.StepStatusRunning
+		m, _ := startedModel(t, NewModel("", nil, run))
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+		if key == "ctrl+c" {
+			msg = tea.KeyMsg{Type: tea.KeyCtrlC}
+		}
+		next, cmd := m.Update(msg)
+		if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{""}) || got.Confirmations != 1 || got.Quit {
+			t.Fatalf("%s: did %+v; want the title cleared and no quit before it lands", key, got)
+		}
+		if view := next.(Model).View(); view != "" {
+			t.Errorf("%s: quitting view = %q, want empty", key, view)
+		}
+		_, cmd = next.(Model).Update(termtitle.SetMsg{})
+		if got := termtitletest.Run(cmd); len(got.Titles) != 0 || !got.Quit {
+			t.Fatalf("%s: once the blank title lands: %+v; want a quit and no title", key, got)
+		}
+	}
+}
+
+func TestQuit_WaitsForATitleInFlight(t *testing.T) {
+	run := testRun()
+	run.Steps[0].Status = types.StepStatusRunning
+	m, _ := startedModel(t, NewModel("", nil, run))
+	next, _ := m.Update(spinnerTickMsg{}) // a title is now in flight
+	next, cmd := next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if got := termtitletest.Run(cmd); len(got.Titles) != 0 || got.Quit {
+		t.Fatalf("quit with a title in flight did %+v; want it to wait", got)
+	}
+	next, cmd = next.(Model).Update(termtitle.SetMsg{})
+	if got := termtitletest.Run(cmd); !reflect.DeepEqual(got.Titles, []string{""}) || got.Confirmations != 1 || got.Quit {
+		t.Fatalf("after the in-flight title: %+v; want the blank title", got)
+	}
+	_, cmd = next.(Model).Update(termtitle.SetMsg{})
+	if !termtitletest.Run(cmd).Quit {
+		t.Fatal("no quit once the blank title landed")
 	}
 }
