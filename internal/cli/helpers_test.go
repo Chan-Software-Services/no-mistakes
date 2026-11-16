@@ -17,6 +17,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/testhome"
 )
 
 func init() {
@@ -73,75 +74,28 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
-	// Resolve the toolchain's caches before HOME moves: see pinGoCaches.
-	if err := pinGoCaches(); err != nil {
-		fmt.Fprintf(os.Stderr, "pin Go caches: %v\n", err)
-		os.Exit(1)
-	}
-	base := os.TempDir()
+	// The daemon sockets under NM_HOME need a short path, so off Windows the
+	// directories go in /tmp rather than a possibly long TMPDIR.
+	base := ""
 	if runtime.GOOS != "windows" {
 		base = "/tmp"
 	}
-	root, err := os.MkdirTemp(base, "nm-cli-test-")
+	dirs, err := testhome.Setup("nm-cli", base)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	home, err := os.MkdirTemp(base, "nm-cli-home-")
-	if err != nil {
-		_ = os.RemoveAll(root)
-		fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
-		os.Exit(1)
-	}
-	_ = os.Setenv("NM_HOME", root)
-	_ = os.Setenv("HOME", home)
 	_ = os.Setenv("NO_MISTAKES_TELEMETRY", "off")
 	_ = os.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
 
 	code := m.Run()
 
-	_ = daemon.Stop(paths.WithRoot(root))
-	_ = os.RemoveAll(root)
-	// A test HOME that cannot be removed stays in /tmp for good, and enough of
-	// them fill its quota and fail every other package, so a leak fails this
-	// one by name instead.
-	if err := os.RemoveAll(home); err != nil {
-		fmt.Fprintf(os.Stderr, "remove test HOME %s: %v\n", home, err)
-		if code == 0 {
-			code = 1
-		}
-	}
+	_ = daemon.Stop(paths.WithRoot(dirs.Root))
+	code = dirs.Close(code)
 	if builtBin != "" {
 		_ = os.RemoveAll(filepath.Dir(builtBin))
 	}
 	os.Exit(code)
-}
-
-// pinGoCaches fixes GOMODCACHE and GOCACHE at the values the toolchain
-// resolves before TestMain replaces HOME. Both default to paths under HOME, so
-// without the pin every `go build` a test runs would fill the throwaway HOME
-// with a fresh module cache and build cache: a re-download of every module and
-// a rebuild of the standard library per run, and a module cache whose
-// read-only directories os.RemoveAll cannot delete.
-func pinGoCaches() error {
-	out, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
-	if err != nil {
-		return fmt.Errorf("go env GOMODCACHE GOCACHE: %w", err)
-	}
-	values := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
-	if len(values) != 2 {
-		return fmt.Errorf("go env GOMODCACHE GOCACHE printed %d lines, want 2: %q", len(values), out)
-	}
-	for i, name := range []string{"GOMODCACHE", "GOCACHE"} {
-		value := strings.TrimSpace(values[i])
-		if value == "" {
-			return fmt.Errorf("go env %s is empty", name)
-		}
-		if err := os.Setenv(name, value); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func explicitDaemonRunRootFromArgs(args []string) (string, bool) {

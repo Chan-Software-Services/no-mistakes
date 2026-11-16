@@ -9,30 +9,19 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
+	"github.com/kunchenguid/no-mistakes/internal/testhome"
 )
 
 func TestMain(m *testing.M) {
-	root, err := os.MkdirTemp("", "nm-main-test-")
+	dirs, err := testhome.Setup("nm-main", "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	home, err := os.MkdirTemp("", "nm-main-home-")
-	if err != nil {
-		_ = os.RemoveAll(root)
-		fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
-		os.Exit(1)
-	}
-	_ = os.Setenv("NM_HOME", root)
-	_ = os.Setenv("HOME", home)
 	_ = os.Setenv("NO_MISTAKES_TELEMETRY", "off")
 	_ = os.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
 
-	code := m.Run()
-
-	_ = os.RemoveAll(root)
-	_ = os.RemoveAll(home)
-	os.Exit(code)
+	os.Exit(dirs.Close(m.Run()))
 }
 
 func TestRunAttemptsOldExecutableCleanupBeforeEarlyRoutes(t *testing.T) {

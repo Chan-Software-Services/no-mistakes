@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/testhome"
 )
 
 // testParentEnv marks the environment of a process this package's TestMain
@@ -19,36 +21,15 @@ func TestMain(m *testing.M) {
 	if os.Getenv(testParentEnv) == "1" {
 		os.Exit(runTestChild(m))
 	}
-	root, err := os.MkdirTemp("", "nm-update-test-")
+	dirs, err := testhome.Setup("nm-update", "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	home, err := os.MkdirTemp("", "nm-update-home-")
-	if err != nil {
-		_ = os.RemoveAll(root)
-		fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
-		os.Exit(1)
-	}
-	_ = os.Setenv("NM_HOME", root)
-	_ = os.Setenv("HOME", home)
 	_ = os.Setenv("NO_MISTAKES_TELEMETRY", "off")
 	_ = os.Setenv(testParentEnv, "1")
 
-	code := m.Run()
-
-	// A directory that cannot be removed stays in the temp dir for good, and
-	// enough of them fill its quota and fail every other package, so a leak
-	// fails this one by name instead.
-	for _, dir := range []string{root, home} {
-		if err := os.RemoveAll(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "remove %s: %v\n", dir, err)
-			if code == 0 {
-				code = 1
-			}
-		}
-	}
-	os.Exit(code)
+	os.Exit(dirs.Close(m.Run()))
 }
 
 // runTestChild runs a copy of this test binary that a test re-executed. Such
