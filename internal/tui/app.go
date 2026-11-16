@@ -82,6 +82,10 @@ type Model struct {
 	yoloMode         bool                    // auto-resolve every step awaiting human action
 	yoloApproved     map[types.StepName]bool // steps already finalized (approved) this run
 	yoloFixed        map[types.StepName]bool // steps yolo has already requested a fix for
+	// yoloAnswered is the status each gate had when yolo answered it, kept
+	// until the TUI sees that step's status or gate change, so the events
+	// that arrive before then do not answer the same gate again.
+	yoloAnswered map[types.StepName]types.StepStatus
 
 	// Guarded local-branch synchronization. Cached state is rendered passively;
 	// only the explicit u flow calls Refresh or Apply.
@@ -123,6 +127,7 @@ func NewModel(socketPath string, client *ipc.Client, run *ipc.RunInfo) Model {
 		syntheticSteps:      syntheticSteps,
 		yoloApproved:        make(map[types.StepName]bool),
 		yoloFixed:           make(map[types.StepName]bool),
+		yoloAnswered:        make(map[types.StepName]types.StepStatus),
 	}
 	// Populate findings and start times from initial step data (for re-attach scenarios).
 	for _, s := range steps {

@@ -281,6 +281,7 @@ func (m *Model) clearGateState(step types.StepName) {
 	delete(m.findingCursor, step)
 	delete(m.findingInstructions, step)
 	delete(m.addedFindings, step)
+	delete(m.yoloAnswered, step)
 	if m.editor != nil && m.editor.step == step {
 		m.editor = nil
 	}
@@ -335,6 +336,9 @@ func (m Model) reviewRetryError() error {
 func (m *Model) updateStepStatus(name types.StepName, status types.StepStatus) {
 	for i := range m.steps {
 		if m.steps[i].StepName == name {
+			if m.steps[i].Status != status {
+				delete(m.yoloAnswered, name)
+			}
 			m.steps[i].Status = status
 			if status != types.StepStatusFixReview {
 				m.invalidateStepDiff(name)

@@ -104,6 +104,9 @@ func (m Model) maybeAutoApproveCmd() tea.Cmd {
 	if step == nil || m.yoloApproved[step.StepName] {
 		return nil
 	}
+	if answered, ok := m.yoloAnswered[step.StepName]; ok && answered == step.Status {
+		return nil
+	}
 	if pipeline.HasProtectedPathRefusal(m.stepFindings[step.StepName]) || pipeline.HasUnvalidatedWorkRefusal(m.stepFindings[step.StepName]) {
 		return nil
 	}
@@ -132,10 +135,20 @@ func (m Model) maybeAutoApproveCmd() tea.Cmd {
 	if step.Status != types.StepStatusFixReview && !m.yoloFixed[step.StepName] && m.stepHasActionableFindings(step.StepName) {
 		m.yoloFixed[step.StepName] = true
 		m.resetFindingSelection(step.StepName)
-		return m.respondCmd(types.ActionFix)
+		return m.yoloAnswer(step, types.ActionFix)
 	}
 	m.yoloApproved[step.StepName] = true
-	return m.respondCmd(types.ActionApprove)
+	return m.yoloAnswer(step, types.ActionApprove)
+}
+
+// yoloAnswer sends yolo's response to the gate step and, when one is sent,
+// marks the gate answered at its current status.
+func (m Model) yoloAnswer(step *ipc.StepResultInfo, action types.ApprovalAction) tea.Cmd {
+	cmd := m.respondCmd(action)
+	if cmd != nil {
+		m.yoloAnswered[step.StepName] = step.Status
+	}
+	return cmd
 }
 
 func (m Model) respondCmd(action types.ApprovalAction) tea.Cmd {
