@@ -1142,7 +1142,7 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 		"Do not move, commit, or modify source files only to make evidence linkable",
 		"if no existing check drives a scenario, write or improve a focused test",
 		"perform manual verification with evidence",
-		"Always include an \"artifacts\" array",
+		"Include an \"artifacts\" array when you produced reviewer-visible evidence artifacts; leave it empty or out when you produced none. Use artifact path for file artifacts",
 		"If sufficient evidence is not possible, report a warning finding",
 		"When the blocker is a host capability or OS permission the agent's own process lacks",
 		"name the specific capability or permission and how to grant it",

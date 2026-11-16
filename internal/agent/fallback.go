@@ -116,7 +116,9 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) 
 			return nil, err
 		}
 		if i == len(candidates)-1 || !isAgentUnavailableError(err) {
-			return nil, err
+			// What the candidate reported beside its error (its refused
+			// structured outputs) reaches the caller.
+			return result, err
 		}
 		next := candidates[i+1]
 		emitAgentFallback(opts, current.Name(), next.Name(), err)

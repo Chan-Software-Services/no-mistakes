@@ -45,6 +45,10 @@ var claudeAcceptedOutputExitGrace = 60 * time.Second
 // --json-schema output.
 const claudeStructuredOutputTool = "StructuredOutput"
 
+// claudeStructuredOutputRetriesExhausted is the result subtype the CLI ends a
+// turn with when it refused every StructuredOutput call up to its own limit.
+const claudeStructuredOutputRetriesExhausted = "error_max_structured_output_retries"
+
 const claudeScannerMaxTokenSize = 256 * 1024 * 1024
 
 // claudeAgent spawns the claude CLI for each invocation.
@@ -169,25 +173,31 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 		}
 		a.stampClaudeResult(res, stream.sessionID, stream.model, resumeID)
 		emitAgentExited(opts, "claude", pid, nil)
-		return res, nil
+		return stream.withRefused(res), nil
 	}
 
 	if parseErr != nil {
 		retErr := fmt.Errorf("claude parse events: %w", parseErr)
 		emitAgentExited(opts, "claude", pid, retErr)
-		return resultFromUsage(usage), retErr
+		return stream.withRefused(resultFromUsage(usage)), retErr
 	}
 	if waitErr != nil {
-		retErr := fmt.Errorf("claude exited: %w: %s", waitErr, string(stderrBuf))
+		var retErr error = fmt.Errorf("claude exited: %w: %s", waitErr, string(stderrBuf))
+		if r := stream.result; r != nil && r.Subtype == claudeStructuredOutputRetriesExhausted {
+			// The CLI exits non-zero on an error result. Name the subtype
+			// and keep the mark whatever the exit code, so a caller that can
+			// use the refused submissions still tells this case apart.
+			retErr = &structuredOutputRetriesExhausted{err: fmt.Errorf("claude error: subtype=%s; %w", r.Subtype, retErr)}
+		}
 		emitAgentExited(opts, "claude", pid, retErr)
-		return resultFromUsage(usage), retErr
+		return stream.withRefused(resultFromUsage(usage)), retErr
 	}
 
 	result := stream.result
 	if result == nil {
 		retErr := fmt.Errorf("claude returned no result event")
 		emitAgentExited(opts, "claude", pid, retErr)
-		return resultFromUsage(usage), retErr
+		return stream.withRefused(resultFromUsage(usage)), retErr
 	}
 
 	res, err := finalizeClaudeResult(result, opts.JSONSchema, usage)
@@ -210,7 +220,7 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 		err = &claudeTurnRanToolsError{err: err}
 	}
 	emitAgentExited(opts, "claude", pid, err)
-	return res, err
+	return stream.withRefused(res), err
 }
 
 // stampClaudeResult records the session, model and cache-reporting facts the
@@ -234,7 +244,11 @@ func (a *claudeAgent) Close() error { return nil }
 
 func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage TokenUsage) (*Result, error) {
 	if result.IsError || result.Subtype != "success" {
-		return resultFromUsage(usage), fmt.Errorf("claude error: subtype=%s", result.Subtype)
+		err := fmt.Errorf("claude error: subtype=%s", result.Subtype)
+		if result.Subtype == claudeStructuredOutputRetriesExhausted {
+			err = &structuredOutputRetriesExhausted{err: err}
+		}
+		return resultFromUsage(usage), err
 	}
 	if len(schema) > 0 && !claudeHasPayload(result.StructuredOutput) {
 		return resultFromUsage(usage), rejectStructuredOutput(errNoStructuredOutput)
@@ -386,6 +400,9 @@ type claudeStream struct {
 	ranTools     bool // a tool other than StructuredOutput was called
 	sessionID    string
 	model        string
+	// refused holds the most recent StructuredOutput calls the CLI refused,
+	// oldest first, for Result.RefusedOutputs.
+	refused []RefusedOutput
 
 	// structuredCalls holds each StructuredOutput call's input until its
 	// tool_result says whether the CLI accepted it.
@@ -402,6 +419,31 @@ func (s *claudeStream) accept(payload json.RawMessage, text string, seq int) {
 	if first && s.onFirstAccept != nil {
 		s.onFirstAccept()
 	}
+}
+
+// refuse records a StructuredOutput call the CLI refused, keeping only the
+// most recent maxRefusedOutputs, each cut to maxRefusedOutputBytes.
+func (s *claudeStream) refuse(payload json.RawMessage, reason string) {
+	s.refused = append(s.refused, RefusedOutput{
+		Payload: cutValidUTF8(string(payload), maxRefusedOutputBytes),
+		Reason:  cutValidUTF8(reason, maxRefusedOutputBytes),
+	})
+	if extra := len(s.refused) - maxRefusedOutputs; extra > 0 {
+		s.refused = append([]RefusedOutput(nil), s.refused[extra:]...)
+	}
+}
+
+// withRefused sets the stream's refused submissions on res, creating a Result
+// when the path had none, so they reach the caller beside an error too.
+func (s *claudeStream) withRefused(res *Result) *Result {
+	if len(s.refused) == 0 {
+		return res
+	}
+	if res == nil {
+		res = &Result{}
+	}
+	res.RefusedOutputs = append([]RefusedOutput(nil), s.refused...)
+	return res
 }
 
 // ignoredAfterAcceptance names what the stream and the process did after the
@@ -447,7 +489,7 @@ type claudeMessage struct {
 }
 
 // claudeContent is one content block of an assistant or user message: text,
-// a tool_use (ID, Name, Input) or a tool_result (ToolUseID, IsError).
+// a tool_use (ID, Name, Input) or a tool_result (ToolUseID, IsError, Content).
 type claudeContent struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text"`
@@ -456,6 +498,30 @@ type claudeContent struct {
 	Input     json.RawMessage `json:"input"`
 	ToolUseID string          `json:"tool_use_id"`
 	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
+}
+
+// claudeToolResultText reads a tool_result's content, which is either a
+// string or a list of text blocks.
+func claudeToolResultText(raw json.RawMessage) string {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return ""
+	}
+	var parts []string
+	for _, block := range blocks {
+		if block.Type == "text" && block.Text != "" {
+			parts = append(parts, block.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // parseClaudeEvents reads JSONL from the reader and dispatches events.
@@ -549,7 +615,9 @@ func parseClaudeEvents(ctx context.Context, r io.Reader, onChunk func(string), u
 					continue
 				}
 				delete(stream.structuredCalls, c.ToolUseID)
-				if !c.IsError {
+				if c.IsError {
+					stream.refuse(input, claudeToolResultText(c.Content))
+				} else {
 					stream.accept(input, textBuf, seq)
 				}
 			}

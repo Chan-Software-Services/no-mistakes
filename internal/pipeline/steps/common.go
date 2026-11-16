@@ -95,12 +95,14 @@ func unmarshalRequiredTestFindings(raw []byte, findings *Findings) error {
 	if strings.TrimSpace(*payload.TestingSummary) == "" {
 		return fmt.Errorf("empty testing summary")
 	}
-	if payload.Artifacts == nil {
-		return fmt.Errorf("missing artifacts array")
-	}
-	for i, artifact := range *payload.Artifacts {
-		if artifact.Label == nil {
-			return fmt.Errorf("artifact %d missing label", i)
+	// artifacts is optional: absent, or null as an adapter that fills every
+	// optional field sends it, reads as none, so a field with no evidence value
+	// cannot refuse a whole report (run 01M6KC8W8JRWQJ0RHZ5S25M04W).
+	if payload.Artifacts != nil {
+		for i, artifact := range *payload.Artifacts {
+			if artifact.Label == nil {
+				return fmt.Errorf("artifact %d missing label", i)
+			}
 		}
 	}
 	// The scenario list and the verdict are the step's live-validation
@@ -293,7 +295,7 @@ var testFindingsSchema = json.RawMessage(`{
 			"description": "go when every scenario that could be driven passed and nothing untested puts the intent in doubt; no-go when a scenario failed or the change is not safe to ship; inconclusive when the change has a live-exercisable product surface but too little could be driven live to judge; no-surface when this change has no runtime product surface no-mistakes can drive live"
 		}
 	},
-	"required": ["findings", "summary", "tested", "testing_summary", "artifacts", "scenarios", "verdict"]
+	"required": ["findings", "summary", "tested", "testing_summary", "scenarios", "verdict"]
 }`)
 
 // reviewFindingsSchema is the JSON schema for structured review output with risk assessment.

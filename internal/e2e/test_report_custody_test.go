@@ -164,3 +164,208 @@ func TestAcceptedTestReportSurvivesLaterTurnsJourney(t *testing.T) {
 		t.Fatalf("recorded Test report = verdict %q scenarios %+v, want the submitted report's go and its one scenario", findings.Verdict, findings.Scenarios)
 	}
 }
+
+// refusedReportScenarioName is the one scenario the refused Test reports
+// carry. The fake agent answers a correction prompt that holds it with the
+// report rebuilt from them, and any other correction prompt with what a
+// correction can rebuild from the probe alone.
+const refusedReportScenarioName = "an organizer adds an option and sees every file answer offered"
+
+// refusedThenProbedScenario scripts the Test evidence turn of run
+// 01M6KC8W8JRWQJ0RHZ5S25M04W (T213): the agent submits its whole report
+// three times and the CLI refuses each for the missing artifacts array, then
+// it sends a probe with no scenarios, which the CLI accepts and which becomes
+// the turn's output. The gate's validator refuses the probe's empty scenarios
+// and asks for a correction. A correction that sees the refused reports
+// rebuilds the report from them; one that sees only the probe can say no more
+// than that nothing was driven live, which is how the recorded run parked
+// "inconclusive: 0 of 1 scenarios driven live" after a full live run.
+func refusedThenProbedScenario(t *testing.T) string {
+	t.Helper()
+	scenario := map[string]any{
+		"name":     refusedReportScenarioName,
+		"result":   "pass",
+		"live":     true,
+		"evidence": "the option picker listed every answer from the imported file that no other option held",
+		"reason":   "",
+	}
+	refusedReport := map[string]any{
+		"findings":        []any{},
+		"summary":         "every scenario driven live passed",
+		"tested":          []string{"npx playwright test e2e/options.spec.ts"},
+		"testing_summary": "Drove the option picker live against an isolated stack; it passed.",
+		"scenarios":       []any{scenario},
+		"verdict":         "go",
+	}
+	probe := map[string]any{
+		"findings":        []any{},
+		"summary":         "Test submission to check the schema accepts the artifacts field.",
+		"tested":          []string{"Baseline (already run): ./scripts/test.sh"},
+		"testing_summary": "Schema check only.",
+		"artifacts":       []any{},
+		"scenarios":       []any{},
+		"verdict":         "go",
+	}
+	const session = "a3f0c0de-0000-4000-8000-000000000213"
+	usage := map[string]int{"input_tokens": 10, "output_tokens": 5}
+	call := func(id string, input map[string]any) string {
+		return claudeStreamLine(t, map[string]any{"type": "assistant", "session_id": session, "message": map[string]any{
+			"model": "claude-opus-4-7", "usage": usage,
+			"content": []any{map[string]any{"type": "tool_use", "id": id, "name": "StructuredOutput", "input": input}},
+		}})
+	}
+	outcome := func(id, content string, isError bool) string {
+		block := map[string]any{"type": "tool_result", "tool_use_id": id, "content": content}
+		if isError {
+			block["is_error"] = true
+		}
+		return claudeStreamLine(t, map[string]any{"type": "user", "session_id": session, "message": map[string]any{
+			"role": "user", "content": []any{block},
+		}})
+	}
+	stream := []string{
+		claudeStreamLine(t, map[string]any{"type": "system", "subtype": "init", "session_id": session}),
+		claudeStreamLine(t, map[string]any{"type": "assistant", "session_id": session, "message": map[string]any{
+			"model": "claude-opus-4-7", "usage": usage,
+			"content": []any{map[string]any{"type": "tool_use", "id": "toolu_drive", "name": "Bash", "input": map[string]any{
+				"command": "npx playwright test e2e/options.spec.ts",
+			}}},
+		}}),
+		outcome("toolu_drive", "1 passed", false),
+	}
+	for i := 1; i <= 3; i++ {
+		id := "toolu_report" + string(rune('0'+i))
+		stream = append(stream,
+			call(id, refusedReport),
+			outcome(id, "Output does not match required schema: root: must have required property 'artifacts'", true),
+		)
+	}
+	stream = append(stream,
+		call("toolu_probe", probe),
+		outcome("toolu_probe", "Structured output provided successfully", false),
+		claudeStreamLine(t, map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": session, "structured_output": probe, "usage": usage}),
+	)
+
+	var b strings.Builder
+	b.WriteString("actions:\n  - match: \"" + testEvidencePromptMarker + "\"\n    claude_stream:\n")
+	for _, line := range stream {
+		quoted, err := json.Marshal(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.WriteString("      - " + string(quoted) + "\n")
+	}
+	b.WriteString(`  - match: "` + refusedReportScenarioName + `"
+    text: "rebuilt the report from the refused submission"
+    structured:
+      findings: []
+      summary: "every scenario driven live passed"
+      tested: ["npx playwright test e2e/options.spec.ts"]
+      testing_summary: "Drove the option picker live against an isolated stack; it passed."
+      artifacts: []
+      scenarios:
+        - name: "` + refusedReportScenarioName + `"
+          result: pass
+          live: true
+          evidence: "the option picker listed every answer from the imported file that no other option held"
+          reason: ""
+      verdict: go
+  - match: "` + testCorrectionPromptMarker + `"
+    text: "the probe records nothing driven live"
+    structured:
+      findings: []
+      summary: "No live validation was recorded in the prior submission."
+      tested: ["Baseline (already run): ./scripts/test.sh"]
+      testing_summary: "The prior submission recorded no live scenario."
+      artifacts: []
+      scenarios:
+        - name: "the change works for an end user"
+          result: untested
+          live: false
+          evidence: ""
+          reason: "the prior payload did not establish a live result"
+      verdict: inconclusive
+  - text: "no issues found"
+    structured:
+      findings: []
+      summary: "no issues found"
+      risk_level: low
+      risk_rationale: "no risks detected in the diff"
+      risk_scope: source-or-external
+`)
+	path := filepath.Join(t.TempDir(), "refused-then-probed-scenario.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write scenario: %v", err)
+	}
+	return path
+}
+
+// testCorrectionPromptMarker opens the Test step's correction prompt.
+const testCorrectionPromptMarker = "Your previous structured findings were REJECTED"
+
+// TestRefusedTestReportKeepsItsEvidenceJourney reproduces run
+// 01M6KC8W8JRWQJ0RHZ5S25M04W (T213) through the stock `no-mistakes axi`
+// surface. The CLI refused the Test agent's whole report three times for a
+// missing artifacts array and then accepted a probe with no scenarios; the
+// gate's correction turn saw only the probe, and the step parked inconclusive
+// with 0 of 1 scenarios driven live after a full live run. The correction
+// turn now receives the refused reports, so the recorded verdict and
+// scenarios are theirs, and a note says the report was rebuilt.
+func TestRefusedTestReportKeepsItsEvidenceJourney(t *testing.T) {
+	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: refusedThenProbedScenario(t)})
+	if out, err := h.Run("init"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	branch := "feature/refused-test-report"
+	h.CommitChange(branch, ".no-mistakes.yaml", "commands:\n  lint: 'exit 0'\n", "configure lint")
+	h.CommitChange(branch, "feature.txt", "value\n", "add feature")
+
+	runOut, runErr := h.Run("axi", "run", "--intent", "validate the feature whose test report the CLI refused", "--skip", "pr,ci")
+	t.Logf("stock axi run surface:\n%s", runOut)
+	// A Test step that parks is the failure this journey reproduces, so it
+	// is reported at once with what it parked on rather than waited out.
+	if active := h.ActiveRun(branch); active != nil {
+		if step, ok := findStep(h.RunInfo(active.ID).Steps, types.StepTest); ok && step.Status == types.StepStatusAwaitingApproval {
+			t.Fatalf("Test step parked, want the refused report's go recorded; findings: %s", deref(step.FindingsJSON))
+		}
+	}
+	run := h.WaitForRun(branch, 90*time.Second)
+
+	var corrections []string
+	for _, inv := range h.AgentInvocations() {
+		if strings.Contains(inv.Prompt, testCorrectionPromptMarker) {
+			corrections = append(corrections, inv.Prompt)
+		}
+	}
+	if len(corrections) != 1 || !strings.Contains(corrections[0], refusedReportScenarioName) {
+		t.Fatalf("Test correction prompts = %d, want one that holds the refused report's scenario %q:\n%s",
+			len(corrections), refusedReportScenarioName, strings.Join(corrections, "\n---\n"))
+	}
+	if runErr != nil || run.Status != types.RunCompleted {
+		t.Fatalf("run status = %s (axi run error %v, run error %q), want completed with the refused report's go\n%s", run.Status, runErr, deref(run.Error), runOut)
+	}
+
+	step, ok := findStep(run.Steps, types.StepTest)
+	if !ok || step.Status != types.StepStatusCompleted || step.FindingsJSON == nil {
+		t.Fatalf("test step = %+v, want completed with recorded findings", step)
+	}
+	findings, err := types.ParseFindingsJSON(*step.FindingsJSON)
+	if err != nil {
+		t.Fatalf("parse Test findings: %v", err)
+	}
+	if findings.Verdict != types.TestVerdictGo || len(findings.Scenarios) != 1 || findings.Scenarios[0].Name != refusedReportScenarioName || !findings.Scenarios[0].Live {
+		t.Fatalf("recorded Test report = verdict %q scenarios %+v, want the refused report's go and its one live scenario", findings.Verdict, findings.Scenarios)
+	}
+	note := ""
+	for _, item := range findings.Items {
+		if strings.HasPrefix(item.Description, "Test report rebuilt by a correction turn: ") {
+			note = item.Description
+			if item.Severity != types.FindingSeverityInfo || item.Action != types.ActionNoOp {
+				t.Fatalf("rebuilt-report note = %+v, want severity info and action no-op", item)
+			}
+		}
+	}
+	if !strings.Contains(note, "the evidence turn's report was refused (") {
+		t.Fatalf("Test findings carry no rebuilt-report note: %+v", findings.Items)
+	}
+}

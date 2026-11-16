@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/kunchenguid/no-mistakes/internal/agentcfg"
 	"github.com/kunchenguid/no-mistakes/internal/runenv"
@@ -98,6 +99,55 @@ func rejectStructuredOutput(err error) error {
 		return err
 	}
 	return &structuredOutputRejection{err: err}
+}
+
+// IsStructuredOutputRetriesExhausted reports whether an invocation ended
+// because the agent's CLI refused every structured-output submission until
+// its own retry limit (Claude's error_max_structured_output_retries). It is
+// deliberately not a StructuredOutputRejected: only a caller that can use the
+// refused submissions (Result.RefusedOutputs) treats it as correctable.
+func IsStructuredOutputRetriesExhausted(err error) bool {
+	var exhausted interface {
+		StructuredOutputRetriesExhausted() bool
+	}
+	return errors.As(err, &exhausted) && exhausted.StructuredOutputRetriesExhausted()
+}
+
+type structuredOutputRetriesExhausted struct{ err error }
+
+func (e *structuredOutputRetriesExhausted) Error() string                        { return e.err.Error() }
+func (e *structuredOutputRetriesExhausted) Unwrap() error                        { return e.err }
+func (*structuredOutputRetriesExhausted) StructuredOutputRetriesExhausted() bool { return true }
+
+// RefusedOutput is one structured-output submission the agent's CLI refused
+// during an invocation: what was submitted and the CLI's refusal text.
+type RefusedOutput struct {
+	// Payload is the submission, cut to maxRefusedOutputBytes of valid UTF-8,
+	// so it may not be complete JSON.
+	Payload string
+	// Reason is the CLI's refusal text, cut the same way.
+	Reason string
+}
+
+// maxRefusedOutputs and maxRefusedOutputBytes bound Result.RefusedOutputs:
+// the most recent submissions only, each cut to 64 KiB.
+const (
+	maxRefusedOutputs     = 3
+	maxRefusedOutputBytes = 64 * 1024
+)
+
+// cutValidUTF8 returns s as valid UTF-8, cut to at most max bytes at a rune
+// boundary.
+func cutValidUTF8(s string, max int) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // Attempt describes one completed concrete adapter attempt for an agent
@@ -268,6 +318,12 @@ type Result struct {
 	// durable session, so round N's counters include rounds 1..N-1. The pipeline
 	// uses it to record correct per-round token deltas (see PerRoundTokens).
 	SessionUsageCumulative bool
+	// RefusedOutputs are the most recent structured-output submissions the
+	// agent's CLI refused during this invocation, oldest first, at most
+	// maxRefusedOutputs of them. It is set on a Result returned beside an
+	// error too. Only the Claude adapter fills it. It lives in memory only:
+	// it is never persisted and never enters telemetry or InvocationMetrics.
+	RefusedOutputs []RefusedOutput
 }
 
 // TokenUsage tracks token consumption for an agent invocation.

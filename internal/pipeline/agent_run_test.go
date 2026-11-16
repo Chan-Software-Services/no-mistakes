@@ -653,3 +653,46 @@ func TestExecutor_DirectAgentRunUnderACallerDeadlineRefusesLateWork(t *testing.T
 		t.Fatal("expected the expired caller deadline to fail the run")
 	}
 }
+
+// TestRunAgent_KeepsTheResultBesideTheAdaptersOwnError: a Test evidence turn
+// whose every report the CLI refused ends in an error, and the refused
+// reports ride the Result beside it (agent.Result.RefusedOutputs). The
+// invocation layer hands that Result on when the error is the adapter's own,
+// and still drops it when the caller's budget cut the turn, so late output
+// from a cut turn is never used.
+func TestRunAgent_KeepsTheResultBesideTheAdaptersOwnError(t *testing.T) {
+	t.Parallel()
+	refused := []agent.RefusedOutput{{Payload: `{"verdict":"go"}`, Reason: "must have required property 'artifacts'"}}
+	adapterErr := errors.New("claude error: subtype=error_max_structured_output_retries")
+	ag := &hangingAgent{
+		name: "refused",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			return &agent.Result{RefusedOutputs: refused}, adapterErr
+		},
+	}
+	sctx := &StepContext{Ctx: context.Background(), Agent: ag, Config: &config.Config{AgentTimeout: time.Second}}
+
+	result, err := sctx.RunAgent(agent.RunOpts{Prompt: "work"})
+	if !errors.Is(err, adapterErr) {
+		t.Fatalf("error = %v, want the adapter's own", err)
+	}
+	if result == nil || len(result.RefusedOutputs) != 1 || result.RefusedOutputs[0] != refused[0] {
+		t.Fatalf("result = %+v, want the adapter's Result with its refused outputs", result)
+	}
+
+	cut := &hangingAgent{
+		name: "cut",
+		runFn: func(ctx context.Context, _ agent.RunOpts) (*agent.Result, error) {
+			<-ctx.Done()
+			return &agent.Result{RefusedOutputs: refused}, adapterErr
+		},
+	}
+	sctx = &StepContext{Ctx: context.Background(), Agent: cut, Config: &config.Config{AgentTimeout: 20 * time.Millisecond}}
+	result, err = sctx.RunAgent(agent.RunOpts{Prompt: "work"})
+	if !errors.Is(err, ErrAgentTimeout) {
+		t.Fatalf("error = %v, want the timeout", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil from a turn the budget cut", result)
+	}
+}

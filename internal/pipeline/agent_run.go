@@ -77,10 +77,17 @@ func (sctx *StepContext) runAgent(parent context.Context, opts agent.RunOpts, se
 func invokeAgent(parent context.Context, timeout time.Duration, activity *agentActivity, run func(context.Context) (*agent.Result, error)) (*agent.Result, error) {
 	ctx, cancel, applied := bindAgentDeadline(parent, timeout)
 	result, err := run(ctx)
+	cut := context.Cause(ctx) != nil
 	runErr := classifyAgentRun(ctx, applied, activity, err)
 	cancel()
 	if runErr != nil {
-		return nil, runErr
+		if cut {
+			// Late output from a cut turn is never used.
+			return nil, runErr
+		}
+		// The adapter's own error: what it reported beside it (its refused
+		// structured outputs) still reaches the caller.
+		return result, runErr
 	}
 	return result, nil
 }
