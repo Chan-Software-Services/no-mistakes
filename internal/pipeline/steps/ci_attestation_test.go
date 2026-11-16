@@ -543,31 +543,28 @@ func TestCIStep_PublishRepairDoesNotMintAttestation(t *testing.T) {
 	}
 }
 
-// TestPushStep_AttestsHeadBeforePush pins design C, the simplest sufficient
-// fix for the push-then-attest race: write the attestation for the head
-// about to be pushed BEFORE pushing it, so every consumer of the shared
-// require-no-mistakes action - including one pinned to an immutable
-// revision whose verifier reads the PR body from the frozen `synchronize`
-// event payload - already sees the correct attestation the moment the
-// pushed head becomes current. A post-push write, however fast, cannot beat
-// that: the payload is captured at push time, before any write could land.
-func TestPushStep_AttestsHeadBeforePush(t *testing.T) {
+// pushOntoExistingPR drives the Push step for a branch whose PR already
+// exists, with existingBody(priorHead) as that PR's current body, and returns
+// the body the step wrote back with the prior and the pushed head.
+func pushOntoExistingPR(t *testing.T, existingBody func(priorHead string) string) (updated, priorHead, newHead string) {
+	t.Helper()
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 
-	dir, baseSHA, priorHead := setupGitRepo(t)
+	dir, baseSHA, prior := setupGitRepo(t)
+	priorHead = prior
 	gitCmd(t, dir, "remote", "add", "origin", upstream)
 	gitCmd(t, dir, "push", "origin", "main")
 	gitCmd(t, dir, "push", "origin", "feature")
 
-	priorAttestedBody := compliantPipelineBody(t, priorHead)
+	priorAttestedBody := existingBody(priorHead)
 
 	if err := os.WriteFile(filepath.Join(dir, "new-work.txt"), []byte("new work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitCmd(t, dir, "add", "-A")
 	gitCmd(t, dir, "commit", "-m", "new work")
-	newHead := gitCmd(t, dir, "rev-parse", "HEAD")
+	newHead = gitCmd(t, dir, "rev-parse", "HEAD")
 
 	prURL := "https://github.com/test/repo/pull/42"
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, newHead, config.Commands{})
@@ -609,7 +606,23 @@ func TestPushStep_AttestsHeadBeforePush(t *testing.T) {
 		t.Fatalf("remote head = %s, want %s", remoteHead, newHead)
 	}
 
-	updated := readFakeGHBodyArg(t, logFile)
+	return readFakeGHBodyArg(t, logFile), priorHead, newHead
+}
+
+// TestPushStep_AttestsHeadBeforePush pins design C, the simplest sufficient
+// fix for the push-then-attest race: write the attestation for the head
+// about to be pushed BEFORE pushing it, so every consumer of the shared
+// require-no-mistakes action - including one pinned to an immutable
+// revision whose verifier reads the PR body from the frozen `synchronize`
+// event payload - already sees the correct attestation the moment the
+// pushed head becomes current. A post-push write, however fast, cannot beat
+// that: the payload is captured at push time, before any write could land.
+func TestPushStep_AttestsHeadBeforePush(t *testing.T) {
+	var priorAttestedBody string
+	updated, priorHead, newHead := pushOntoExistingPR(t, func(priorHead string) string {
+		priorAttestedBody = compliantPipelineBody(t, priorHead)
+		return priorAttestedBody
+	})
 	attestation := parsePipelineAttestationForTest(t, updated)
 	if attestation.HeadSHA != newHead {
 		t.Fatalf("attested head = %q, want the pushed head %q", attestation.HeadSHA, newHead)

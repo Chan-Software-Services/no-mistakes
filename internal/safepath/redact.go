@@ -7,7 +7,7 @@
 // subjects, which reach the remote through the auto-fix commit path
 // (commitAgentFixes -> Commit.RenderFixMessage), are a separate surface with a
 // different rendering and are deliberately not covered; so is the opt-in
-// evidence branch, which copies artifact files verbatim.
+// evidence branch, which copies text evidence files verbatim.
 //
 // It is the path analogue of internal/safeurl: safeurl keeps credentials out of
 // published text, safepath keeps the operator's home directory out of it. Route
