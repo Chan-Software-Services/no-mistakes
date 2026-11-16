@@ -413,6 +413,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.err = msg.err
 		return m, nil
+
+	case yoloResponseFailedMsg:
+		// The gate is as it was, so yolo forgets its answer and the next
+		// event, or turning yolo off and on, sends it again; nothing retries
+		// here, so a daemon that stays down is not called in a loop.
+		m.err = msg.err
+		m.forgetYoloAnswer(msg)
+		return m, nil
 	}
 
 	return m, nil
