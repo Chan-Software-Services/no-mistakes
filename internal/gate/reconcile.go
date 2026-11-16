@@ -18,9 +18,9 @@ type StaleBranchReconciliation struct {
 }
 
 // StaleBranchPlan is the verdict of a non-mutating stale-branch inspection.
-// Planning checks containment or the exact run-owned-head policy exception
-// without touching any ref, so a caller can decide before it publishes anything;
-// applying the plan is the only step that archives and removes the branch.
+// Planning checks containment without touching any ref, so a caller can decide
+// before it publishes anything; applying the plan is the only step that
+// archives and removes the branch.
 type StaleBranchPlan struct {
 	PreserveDescendantOf string
 	Reconcile            bool
@@ -32,10 +32,10 @@ type StaleBranchPlan struct {
 
 // ReconcileStaleBranch plans and immediately applies stale private gate branch
 // reconciliation. It removes the branch only after Git proves the live head
-// contains all of its content, or under the exact run-owned-head exception
-// described in docs/src/content/docs/concepts/gate-model.md.
-func ReconcileStaleBranch(ctx context.Context, gateDir, workDir, branch, liveHead, runOwnedHead string) (StaleBranchReconciliation, error) {
-	plan, err := PlanStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, runOwnedHead)
+// contains all of its content, as docs/src/content/docs/concepts/gate-model.md
+// describes.
+func ReconcileStaleBranch(ctx context.Context, gateDir, workDir, branch, liveHead string) (StaleBranchReconciliation, error) {
+	plan, err := PlanStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead)
 	if err != nil || !plan.Reconcile {
 		return StaleBranchReconciliation{}, err
 	}
@@ -44,31 +44,26 @@ func ReconcileStaleBranch(ctx context.Context, gateDir, workDir, branch, liveHea
 
 // PlanStaleBranchReconciliation inspects a private gate branch and reports
 // whether it must be archived and removed before the live head can enter
-// through an ordinary push. It mutates no ref: outside the run-owned-head
-// exception, an unproven private head is refused before publication.
+// through an ordinary push. It mutates no ref: an unproven private head is
+// refused before publication.
 //
 // Rewritten histories require both stable per-file patch identities and final
-// tree survival. runOwnedHead is a policy exception, not containment evidence:
-// fresh submissions must leave it empty, and pipeline publication goes through
-// PlanMirrorPublicationReconciliation instead. The contract and rationale are
-// owned by docs/src/content/docs/concepts/gate-model.md (Private mirror
-// reconciliation).
-func PlanStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead, runOwnedHead string) (StaleBranchPlan, error) {
-	return planStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, false, runOwnedHead)
+// tree survival, whichever run placed the head there. The contract and
+// rationale are owned by docs/src/content/docs/concepts/gate-model.md (Private
+// mirror reconciliation).
+func PlanStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead string) (StaleBranchPlan, error) {
+	return planStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, false)
 }
 
 // PlanMirrorPublicationReconciliation is the pipeline-publication variant of
 // PlanStaleBranchReconciliation: it also leaves a newer descendant of the live
-// head in place. runOwnedHeads are the exact heads the publishing run itself
-// placed on the private mirror - Run.SubmittedHeadSHA and, once the run has
-// published, its durable Run.LastPushedSHA - and nothing else. Neither an
-// agent-created head nor any other recorded head is eligible; every other
-// mirror head still needs the full preservation proof.
-func PlanMirrorPublicationReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead string, runOwnedHeads ...string) (StaleBranchPlan, error) {
-	return planStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, true, runOwnedHeads...)
+// head in place. Every other mirror head that is not an ancestor of the live
+// head needs the full preservation proof.
+func PlanMirrorPublicationReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead string) (StaleBranchPlan, error) {
+	return planStaleBranchReconciliation(ctx, gateDir, workDir, branch, liveHead, true)
 }
 
-func planStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead string, preserveDescendants bool, runOwnedHeads ...string) (StaleBranchPlan, error) {
+func planStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch, liveHead string, preserveDescendants bool) (StaleBranchPlan, error) {
 	var plan StaleBranchPlan
 	branch = strings.TrimSpace(branch)
 	liveHead = strings.TrimSpace(liveHead)
@@ -126,25 +121,23 @@ func planStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch
 			return plan, nil
 		}
 	}
-	if !isRunOwnedHead(gateHead, runOwnedHeads) {
-		atRiskCommits, err := privateCommitsAbsentFromLive(ctx, gateDir, liveHead, gateHead)
-		if err != nil {
-			return plan, fmt.Errorf("compare private mirror content for %s: %w", branchRef, err)
-		}
-		if len(atRiskCommits) > 0 {
-			atRisk := make([]string, 0, len(atRiskCommits))
-			for _, commit := range atRiskCommits {
-				description, describeErr := git.Run(ctx, gateDir, "show", "-s", "--format=%H %s", commit)
-				if describeErr != nil {
-					return plan, fmt.Errorf("describe at-risk private mirror commit %s: %w", commit, describeErr)
-				}
-				atRisk = append(atRisk, description)
+	atRiskCommits, err := privateCommitsAbsentFromLive(ctx, gateDir, liveHead, gateHead)
+	if err != nil {
+		return plan, fmt.Errorf("compare private mirror content for %s: %w", branchRef, err)
+	}
+	if len(atRiskCommits) > 0 {
+		atRisk := make([]string, 0, len(atRiskCommits))
+		for _, commit := range atRiskCommits {
+			description, describeErr := git.Run(ctx, gateDir, "show", "-s", "--format=%H %s", commit)
+			if describeErr != nil {
+				return plan, fmt.Errorf("describe at-risk private mirror commit %s: %w", commit, describeErr)
 			}
-			return plan, fmt.Errorf(
-				"refusing to reconcile private mirror ref %s: %d at-risk commit(s) contain content absent from live head %s: %s",
-				branchRef, len(atRisk), liveHead, strings.Join(atRisk, "; "),
-			)
+			atRisk = append(atRisk, description)
 		}
+		return plan, fmt.Errorf(
+			"refusing to reconcile private mirror ref %s: %d at-risk commit(s) contain content absent from live head %s: %s",
+			branchRef, len(atRisk), liveHead, strings.Join(atRisk, "; "),
+		)
 	}
 
 	return StaleBranchPlan{
@@ -155,18 +148,6 @@ func planStaleBranchReconciliation(ctx context.Context, gateDir, workDir, branch
 		PreviousHead:         gateHead,
 		ArchiveTag:           archiveTag,
 	}, nil
-}
-
-// isRunOwnedHead reports whether the private mirror head is exactly one of the
-// run-owned heads. Matching is on the full object ID only: an abbreviated or
-// empty entry never matches, so an unknown owner cannot widen the exception.
-func isRunOwnedHead(gateHead string, runOwnedHeads []string) bool {
-	for _, owned := range runOwnedHeads {
-		if owned = strings.TrimSpace(owned); owned != "" && owned == gateHead {
-			return true
-		}
-	}
-	return false
 }
 
 // ApplyStaleBranchReconciliation archives the planned head and then removes the

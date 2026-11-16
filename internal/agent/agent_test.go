@@ -576,6 +576,58 @@ func TestFinalizeTextResult_LastValidJSONCandidateWins(t *testing.T) {
 	}
 }
 
+// TestFinalizeTextResult_AnExampleFenceAfterTheAnswerIsReadAsTheAnswer: when
+// the agent prints its answer fence and then a schema-valid example fence, the
+// example is read as the answer and the answer's findings are dropped. This is
+// the accepted reading (Daniel, 2026-11-16, T382 Q1): position is the only
+// signal last-wins has, and a revised answer printed after a draft has the
+// same shape as an example printed after an answer and is far more common, so
+// telling them apart is not attempted. A change in either direction must fail
+// here first.
+func TestFinalizeTextResult_AnExampleFenceAfterTheAnswerIsReadAsTheAnswer(t *testing.T) {
+	schema := json.RawMessage(`{
+		"type":"object",
+		"properties":{
+			"findings":{"type":"array"},
+			"summary":{"type":"string"}
+		},
+		"required":["findings","summary"]
+	}`)
+	fence := func(body string) string { return "```json\n" + body + "\n```" }
+	answer := fence(`{"findings":["line 42 dereferences a nil map"],"summary":"one issue"}`)
+	example := fence(`{"findings":[],"summary":"looks good"}`)
+	cases := []struct {
+		name string
+		text string
+	}{
+		{name: "the example ends the output", text: answer + "\nA clean review would look like:\n" + example},
+		{name: "prose follows the example", text: answer + "\nA clean review would look like:\n" + example + "\nbut that is not the case here."},
+	}
+	for _, agentName := range []string{"codex", "pi", "opencode", "antigravity", "copilot", "rovodev", "acp:omp"} {
+		for _, tc := range cases {
+			t.Run(agentName+"/"+tc.name, func(t *testing.T) {
+				result, err := finalizeTextResult(agentName, tc.text, schema, TokenUsage{})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				var output struct {
+					Findings []string `json:"findings"`
+					Summary  string   `json:"summary"`
+				}
+				if err := json.Unmarshal(result.Output, &output); err != nil {
+					t.Fatalf("failed to parse output: %v", err)
+				}
+				if output.Summary != "looks good" {
+					t.Fatalf("summary = %q, want the example's %q", output.Summary, "looks good")
+				}
+				if output.Findings == nil || len(output.Findings) != 0 {
+					t.Fatalf("findings = %#v, want the example's empty list", output.Findings)
+				}
+			})
+		}
+	}
+}
+
 // TestFinalizeTextResult_NoConcludingValidJSONIsARejection: last-wins never
 // adopts an object the agent went on to talk past, and output with no valid
 // candidate at all is still a structured-output rejection.
