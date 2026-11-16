@@ -1676,3 +1676,180 @@ func asExitError(err error, target **exitError) bool {
 	}
 	return false
 }
+
+// newCLIReplaceFixture is the published-head dead end: the completed run
+// published a pipeline fix commit, the gate branch still names that head, and
+// the operator amended their own commit so the local history lacks the fix.
+func newCLIReplaceFixture(t *testing.T) (cliSyncFixture, string) {
+	t.Helper()
+	f := newCLISyncFixture(t)
+	p, err := paths.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := database.GetRun(f.runID)
+	database.Close()
+	if err != nil || run == nil {
+		t.Fatalf("read run: %v", err)
+	}
+	gate := p.RepoDir(run.RepoID)
+	cliGit(t, filepath.Dir(f.local), "init", "--bare", gate)
+	cliGit(t, filepath.Join(filepath.Dir(f.local), "pipeline"), "push", gate, "HEAD:refs/heads/feature/sync")
+	cliGit(t, f.local, "fetch", f.remote, "feature/sync")
+	if err := os.WriteFile(filepath.Join(f.local, "file.txt"), []byte("feature, rewritten\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cliGit(t, f.local, "commit", "-a", "--amend", "-m", "feature, rewritten")
+	f.old = cliGit(t, f.local, "rev-parse", "HEAD")
+	return f, gate
+}
+
+func TestHumanReplacePublishedShowsTheCommitsAndConfirms(t *testing.T) {
+	f, gate := newCLIReplaceFixture(t)
+	previous := syncInteractive
+	t.Cleanup(func() { syncInteractive = previous })
+
+	syncInteractive = func() bool { return false }
+	out, err := executeCmd("sync", "--replace-published")
+	var ee *exitError
+	if err == nil || !asExitError(err, &ee) || ee.code != 1 {
+		t.Fatalf("non-interactive replacement without --yes = %#v, want exit 1:\n%s", err, out)
+	}
+	for _, want := range []string{
+		"branch:    feature/sync",
+		"published: " + f.pushed,
+		"local:     " + f.old,
+		"Published commits the local history lacks:",
+		f.pushed[:7] + " pipeline fix",
+		" feature\n",
+		"Non-interactive input cannot confirm this. Re-run with `no-mistakes sync --replace-published --yes`.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("non-interactive output lacks %q:\n%s", want, out)
+		}
+	}
+	if got := cliGit(t, gate, "rev-parse", "refs/heads/feature/sync"); got != f.pushed {
+		t.Fatalf("the refused replacement moved the gate to %s", got)
+	}
+
+	syncInteractive = func() bool { return true }
+	const question = "Replace the published head with this local history on the gate? The next run will publish it over the remote branch. [y/N] "
+	for _, answer := range []string{"\n", "n\n"} {
+		buf, err := executeCmdWithInput(answer, "sync", "--replace-published")
+		if err != nil || !strings.Contains(buf, question) || !strings.Contains(buf, "Cancelled; no files or refs were changed.") {
+			t.Fatalf("answer %q: %v\n%s", answer, err, buf)
+		}
+		if got := cliGit(t, gate, "rev-parse", "refs/heads/feature/sync"); got != f.pushed {
+			t.Fatalf("a declined replacement moved the gate to %s", got)
+		}
+	}
+
+	buf, err := executeCmdWithInput("y\n", "sync", "--replace-published")
+	if err != nil {
+		t.Fatalf("confirmed replacement: %v\n%s", err, buf)
+	}
+	for _, want := range []string{question, "the gate follows this local history in place of the published head", "pinned at refs/no-mistakes/recover/" + f.runID} {
+		if !strings.Contains(buf, want) {
+			t.Fatalf("confirmed replacement output lacks %q:\n%s", want, buf)
+		}
+	}
+	if got := cliGit(t, gate, "rev-parse", "refs/heads/feature/sync"); got != f.old {
+		t.Fatalf("gate branch = %s, want the local head %s", got, f.old)
+	}
+	if got := cliGit(t, gate, "rev-parse", "refs/no-mistakes/recover/"+f.runID); got != f.pushed {
+		t.Fatalf("recovery ref = %s, want the published head %s", got, f.pushed)
+	}
+	if got := cliGit(t, f.local, "rev-parse", "HEAD"); got != f.old {
+		t.Fatalf("the replacement moved the local branch to %s", got)
+	}
+}
+
+func TestHumanReplacePublishedYesSkipsTheQuestion(t *testing.T) {
+	f, gate := newCLIReplaceFixture(t)
+	previous := syncInteractive
+	syncInteractive = func() bool { return false }
+	t.Cleanup(func() { syncInteractive = previous })
+
+	out, err := executeCmd("sync", "--replace-published", "--yes")
+	if err != nil {
+		t.Fatalf("--replace-published --yes: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "[y/N]") || !strings.Contains(out, f.pushed[:7]+" pipeline fix") {
+		t.Fatalf("--yes output:\n%s", out)
+	}
+	if got := cliGit(t, gate, "rev-parse", "refs/heads/feature/sync"); got != f.old {
+		t.Fatalf("gate branch = %s, want the local head %s", got, f.old)
+	}
+
+	// The same command where it no longer applies refuses without asking.
+	out, err = executeCmd("sync", "--replace-published", "--yes")
+	if err == nil || !strings.Contains(out, "replacing a published head requires") {
+		t.Fatalf("second replacement = %v:\n%s", err, out)
+	}
+}
+
+func TestAxiSyncReplacePublishedIsRefusedToAgents(t *testing.T) {
+	f, gate := newCLIReplaceFixture(t)
+	for _, args := range [][]string{
+		{"axi", "sync", "--replace-published"},
+		{"axi", "sync", "--replace-published", "--check"},
+	} {
+		out, err := executeCmd(args...)
+		var ee *exitError
+		if err == nil || !asExitError(err, &ee) || ee.code != 2 {
+			t.Fatalf("%v = %#v, want exit 2:\n%s", args, err, out)
+		}
+		if !strings.Contains(out, axiReplacePublishedRefusal) {
+			t.Fatalf("%v refusal lacks %q:\n%s", args, axiReplacePublishedRefusal, out)
+		}
+		if got := cliGit(t, gate, "rev-parse", "refs/heads/feature/sync"); got != f.pushed {
+			t.Fatalf("%v moved the gate to %s", args, got)
+		}
+	}
+
+	// Status names the operator's command in words and never as a command.
+	out, err := executeCmd("axi", "sync", "--check")
+	if err == nil {
+		t.Fatalf("check at the dead end succeeded:\n%s", out)
+	}
+	if !strings.Contains(out, "no-mistakes sync --replace-published") {
+		t.Fatalf("check at the dead end does not name the operator's command:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "command:") && strings.Contains(line, "replace-published") {
+			t.Fatalf("a next_action command names the replacement: %q\n%s", line, out)
+		}
+	}
+}
+
+func TestSyncReplacePublishedFlagValidation(t *testing.T) {
+	newCLIReplaceFixture(t)
+	for _, args := range [][]string{
+		{"sync", "--replace-published", "--check"},
+		{"sync", "--replace-published", "--recover"},
+		{"sync", "--replace-published", "--recover", "--keep-local"},
+		{"sync", "--replace-published", "--adopt-published"},
+		{"sync", "--replace-published", "--bind-archive-ref", "refs/heads/archive/test"},
+	} {
+		out, err := executeCmd(args...)
+		var ee *exitError
+		if err == nil || !asExitError(err, &ee) || ee.code != 2 {
+			t.Errorf("%v should exit 2, got %#v\n%s", args, err, out)
+		}
+	}
+}
+
+func executeCmdWithInput(input string, args ...string) (string, error) {
+	cmd := newRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetIn(strings.NewReader(input))
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return buf.String(), err
+}

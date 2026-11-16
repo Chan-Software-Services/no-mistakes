@@ -351,6 +351,7 @@ no-mistakes axi sync --adopt-published
 | `--keep-local`       | `bool`   | `false` | With `--recover`: keep the current local head; never touches the worktree   |
 | `--bind-archive-ref` | `string` | (none)  | Bind one existing `refs/heads/archive/*` commit as exact evidence for a keep-local recovery; never creates or moves a Git ref |
 | `--adopt-published`  | `bool`   | `false` | Adopt a clean diverged local head into its stale gate lane only when the configured push target has that exact head |
+| `--replace-published` | `bool`  | `false` | Refused with exit `2`: replacing a published head is the operator's decision, made with [`no-mistakes sync --replace-published`](#replacing-a-published-head) |
 
 The default command is an explicit non-interactive apply request and never prompts.
 All modes return the complete `branch_sync` object as TOON.
@@ -369,6 +370,25 @@ Run `axi sync` only when structured output offers `next_action.code: sync`; proc
 A custody-returned branch can later be rebased and force-with-lease pushed to its configured target. Its local head then diverges from the preserved gate lane, so an ordinary gate push correctly rejects it as non-fast-forward. Status reports `state: custody_returned`, `relation: diverged`, and `next_action.code: adopt_published` instead of directing another rejected `axi run`.
 
 `axi sync --adopt-published` is the explicit recovery. It requires a clean exact checked-out branch, the same recovered lane at its recorded preserved head, and a live configured push target whose branch exactly equals local `HEAD`. It fetches that verified object into the local gate, preserves the old gate head under the run's recovery ref, then compare-and-swaps only the current lane. It never pushes to the configured target or changes the worktree. A missing, changed, or different target head, a changed gate lane, or changed local assumptions refuses without replacing the lane.
+
+### Replacing a published head
+
+A finished run whose published head the local branch does not contain is otherwise a dead end: you rewrote the branch after the run published it, for example by amending or replacing a commit the gate added, or by merging the base by hand onto a branch an older binary had rebased.
+Status reports `safety: blocked_diverged` (or `blocked_relation_unknown` when the published head is not in the local object store) with its usual `next_action`, `axi run` is refused by private-mirror reconciliation, and neither `--recover --keep-local` nor `--adopt-published` applies.
+When the conditions status can check locally hold (a terminal run with a push binding, a clean worktree, and the gate branch at the published head), the state's note gains: "Replacing the published head with this local history is the operator's decision: a person runs `no-mistakes sync --replace-published`. Do not run it as an agent; stop and ask."
+No `next_action.command` ever names the replacement, and `no-mistakes axi sync --replace-published` only refuses with exit `2`, so an agent that follows status cannot force its history over the remote.
+
+`no-mistakes sync --replace-published` applies only to a terminal run with an exact push binding to the configured target whose pull request is neither merged nor closed, a branch checked out in one worktree only, and a local head that does not contain the published head (real divergence, not the content-equivalent kind `sync` already advances).
+Anything else refuses with `safety: blocked_replace_published_not_applicable`.
+It prints the branch, the published head, the local head, and the published commits the local history lacks (the first ten by short SHA and subject, then a count of the rest, or "not available locally"), then asks "Replace the published head with this local history on the gate? The next run will publish it over the remote branch. [y/N]".
+`--yes` skips the question; non-interactive input without `--yes` refuses.
+
+Before it changes anything it proves, each refusal changing no Git ref and no database row: the worktree is clean (`blocked_replace_published_dirty`); the local gate is there (`blocked_replace_published_gate_unavailable`); the gate branch is exactly the published head (`blocked_replace_published_gate_changed`); the configured push target's branch, read live under its own `branch_sync_remote_timeout` budget, is still exactly that head under the same target (`blocked_replace_published_offline` when it cannot be read, `blocked_replace_published_target_changed` when it differs or the target changed); and, re-read after that network call, the branch, the local head, and the run are what they were (`blocked_replace_published_assumptions_changed`).
+Then it pins the published head at `refs/no-mistakes/recover/<run>` in the gate (`blocked_replace_published_preserve_failed` when a different commit is already there), stages the local head into the gate by a gate-side fetch, never a push, moves the gate branch from the published head to the local head by compare-and-swap (`blocked_replace_published_gate_race` when the branch moved), and stamps the run's custody returned; when the stamp fails it moves the gate branch back (`blocked_replace_published_custody_failed`).
+It never changes the worktree, the local branch, or the remote.
+
+Status then reports `state: custody_returned`, `safety: gate_ready`, and `next_action.code: run_pipeline`, also after further commits on top of the local head.
+The next `axi run` starts with the replaced published head as its base, so its Rebase step treats the replacement as your force push and does not merge the replaced head back in, and its Push step publishes your history through the same guarded force-push decision as any rewrite: the previous run's published head is the last head seen, so a remote that gained commits your history lacks still refuses.
 
 ### Custody recovery
 
@@ -560,6 +580,7 @@ no-mistakes sync --recover
 no-mistakes sync --recover --keep-local
 no-mistakes sync --bind-archive-ref refs/heads/archive/<name>
 no-mistakes sync --adopt-published
+no-mistakes sync --replace-published
 ```
 
 | Flag                 | Type     | Default | Description                                                     |
@@ -570,8 +591,9 @@ no-mistakes sync --adopt-published
 | `--keep-local`       | `bool`   | `false` | With `--recover`: keep the current local head; never touches the worktree |
 | `--bind-archive-ref` | `string` | (none)  | Bind one existing `refs/heads/archive/*` commit as exact keep-local recovery evidence without changing Git refs |
 | `--adopt-published`  | `bool`   | `false` | Adopt a clean diverged local head into its stale gate lane only when the configured push target has that exact head |
+| `--replace-published` | `bool`  | `false` | After confirmation, make the gate follow the clean local history in place of a finished run's published head it does not contain; the next run publishes it ([details](#replacing-a-published-head)) |
 
-Without `--yes`, apply prints the exact full-SHA plan and requires TTY confirmation; `--recover` and `--adopt-published` prompt the same way before they mutate a gate lane. Archive binding is itself explicit, does not prompt, and cannot be combined with synchronization, recovery, or `--yes`.
+Without `--yes`, apply prints the exact full-SHA plan and requires TTY confirmation; `--recover` and `--adopt-published` prompt the same way before they mutate a gate lane, and `--replace-published` lists the published commits that leave the branch before it asks. `--replace-published` cannot be combined with `--check`, `--recover`, `--keep-local`, `--adopt-published`, or `--bind-archive-ref`. Archive binding is itself explicit, does not prompt, and cannot be combined with synchronization, recovery, or `--yes`.
 A non-TTY apply or recovery refuses with a direct `--yes` hint.
 The command uses the same service and safety contract as `no-mistakes axi sync`, including the guarded equivalent advance and custody recovery documented there; it never stashes, rebases, creates a merge commit, switches branches, deletes a branch, or updates an external remote.
 

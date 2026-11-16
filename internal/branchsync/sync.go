@@ -176,6 +176,8 @@ type Service struct {
 	beforeRecoverWorktreeMove         func()
 	beforeRecoverBranchMove           func()
 	afterRecoverBranchMove            func()
+	beforeReplacePublishedChange      func()
+	setCustodyReturned                func(string) error
 }
 
 // remoteTimeout returns the bounded deadline budget for one remote
@@ -388,6 +390,7 @@ func (s *Service) Refresh(ctx context.Context) State {
 	}
 
 	s.classifyRelation(ctx, &state, bound, run.BaseSHA, true)
+	s.noteReplacePublished(ctx, &state, run)
 	return state
 }
 
@@ -1687,7 +1690,13 @@ func (s *Service) inspect(ctx context.Context) (State, *db.Run, bool) {
 		return state, run, false
 	}
 
+	if s.replacedPublishedHead(ctx, run, head) {
+		s.classifyReplacedPublished(ctx, &state)
+		return state, run, true
+	}
+
 	s.classifyRelation(ctx, &state, ptr(run.LastPushedSHA), run.BaseSHA, false)
+	s.noteReplacePublished(ctx, &state, run)
 	return state, run, true
 }
 
@@ -2411,6 +2420,19 @@ func (s *Service) classifyCustodyReturned(ctx context.Context, state *State) {
 		return
 	}
 	state.Safety = "custody_returned"
+	state.NextAction = &NextAction{Code: "run_pipeline", Command: `no-mistakes axi run --intent "<what the user set out to accomplish>"`}
+}
+
+// classifyReplacedPublished reports a branch whose published head an operator
+// replaced with the local history (ReplacePublished): the gate follows the
+// local head, so a fresh run starts and its push step publishes that history
+// through the existing guarded force push. The relation stays the one between
+// the local head and the replaced published head.
+func (s *Service) classifyReplacedPublished(ctx context.Context, state *State) {
+	state.State = StateCustodyReturned
+	state.Safety = "gate_ready"
+	state.Error = ""
+	state.Relation = relationBetween(ctx, s.workDir(), state.Local.Head, state.Pipeline.PushedHead)
 	state.NextAction = &NextAction{Code: "run_pipeline", Command: `no-mistakes axi run --intent "<what the user set out to accomplish>"`}
 }
 

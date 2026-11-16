@@ -106,6 +106,8 @@ That is the gate's own merge of a moved base when the operator merged the same b
 A merge holding a conflict resolution or an edit of its own, or with a parent the live head lacks, stays at risk.
 The same rule lets branch sync release a branch whose aborted, never-published run holds nothing but such a merge, so the next `axi run` starts after the operator's own merge and push.
 An aborted run that also holds other unpublished commits, such as a review fix, keeps custody: the `axi run` refusal names `no-mistakes axi status`, whose `branch_sync.next_action.command` is `no-mistakes axi sync --recover` (or the explicit discard `--recover --keep-local`).
+A finished run whose published head the operator's rewritten branch does not contain refuses the same way, and no next action resolves it: replacing a published head is the operator's decision, made with `no-mistakes sync --replace-published` (see [Replacing a published head](/no-mistakes/reference/cli/#replacing-a-published-head)).
+That command pins the published head at the run's recovery ref `refs/no-mistakes/recover/<run>` in the gate before the gate branch moves, then moves the branch to the local head by compare-and-swap, so the published commits stay on the machine and the next submission needs no reconciliation.
 
 **Accepted Decision 41-A (issue #983):** pipeline publication may replace a private mirror head that is **exactly equal to a head the publishing run itself placed on the mirror** without patch-ID or tree-survival proof: its `Run.SubmittedHeadSHA`, or, once it has published, its durable `Run.LastPushedSHA`.
 The last pushed head is recorded only after a verified push to the configured push target and mirror settlement, so it is never an external or newer head.
@@ -150,6 +152,7 @@ A head that lacks either one is a history the pipeline rewrote, such as a rebase
 The Push step and the CI step's repair publication share one publication path, which refuses such a head before it writes the PR attestation and before any push, whatever Review approved and whatever the force-push lease would allow.
 A missing, malformed, or unreachable submitted head fails closed.
 An operator who rewrites their branch and force-pushes it to the gate starts a new run whose submitted head is that rewrite, so the rewrite still publishes, through the same guarded `--force-with-lease` push as before.
+The run that follows `no-mistakes sync --replace-published` is the same case: its submitted head is the operator's history and its base is the replaced published head, which the gate pins at the previous run's recovery ref.
 
 ### Daemon
 
