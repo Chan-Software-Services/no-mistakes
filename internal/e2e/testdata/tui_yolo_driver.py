@@ -11,8 +11,8 @@ window in which a wrongly sent response would land, so they stay fixed.
 
 The driver answers the terminal queries the TUI sends at startup, as an
 operator's terminal does: the background-colour query (OSC 11, answered with a
-dark background) and the cursor-position report (CSI 6n). Left unanswered, each
-waits out termenv's 5s timeout before the TUI draws anything.
+dark background) and the cursor-position report (CSI 6n). Left unanswered,
+termenv waits up to 5s for them before the TUI draws anything.
 
 The pty is given a non-zero window size before the TUI reads its grid: a 0x0
 grid makes bubbletea exit immediately, which would turn this live check into a
