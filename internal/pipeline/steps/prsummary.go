@@ -101,8 +101,9 @@ type testingSummaryOptions struct {
 	// disables the evidence half of the allowlist, which fails closed.
 	evidenceRoot string
 	// evidence links artifacts published to the repository's orphan evidence
-	// branch. It is nil when nothing was published, and the artifacts then
-	// render as local paths rather than as links that would not resolve.
+	// branch. It is nil when nothing was published: a non-media artifact the
+	// body can then neither link nor embed is named, if at all, by a label as
+	// kept with the run (renderLocalArtifactReference), never by its path.
 	evidence *evidenceLinks
 	// pushedTree reports whether a repository path is in the tree the PR
 	// shows; a path that is not is never linked (pushedTreeCheck). Nil links

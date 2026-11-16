@@ -262,7 +262,7 @@ func TestPRStep_ScreenshotRendersAsItsCaptionOnly(t *testing.T) {
 	if !strings.Contains(content.Body, "- Screenshot: The checkout page shows the order total.\n") {
 		t.Fatalf("captioned screenshot must render as its caption:\n%s", content.Body)
 	}
-	for _, unwanted := range []string{"checkout.png", "Checkout screenshot", "Second screenshot", "local file:"} {
+	for _, unwanted := range []string{"checkout.png", "Checkout screenshot", "Second screenshot", "kept with the run, not published"} {
 		if strings.Contains(content.Body, unwanted) {
 			t.Fatalf("screenshot rendering must carry no file name, label or path, found %q:\n%s", unwanted, content.Body)
 		}

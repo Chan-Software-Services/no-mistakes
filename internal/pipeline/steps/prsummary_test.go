@@ -833,7 +833,7 @@ func TestBuildTestingSummaryForPR_UncaptionedLocalScreenshotIsLeftOut(t *testing
 	md := BuildTestingSummaryForPR(steps, rounds, "git@github.com:example/widgets.git", "abc123", repoRoot, evidenceRoot, nil)
 	t.Logf("rendered PR testing markdown:\n%s", md)
 
-	for _, unwanted := range []string{"Checkout screenshot", "checkout.png", "local file:", "Screenshot:", "![", "github.com/example/widgets/blob/abc123/"} {
+	for _, unwanted := range []string{"Checkout screenshot", "checkout.png", "kept with the run, not published", "Screenshot:", "![", "github.com/example/widgets/blob/abc123/"} {
 		if strings.Contains(md, unwanted) {
 			t.Fatalf("an uncaptioned screenshot must be left out, found %q, got:\n%s", unwanted, md)
 		}
@@ -859,7 +859,7 @@ func TestBuildTestingSummaryForPR_CaptionedLocalScreenshotRendersAsCaptionOnly(t
 	if !strings.Contains(md, "- Screenshot: Checkout completed visually.") {
 		t.Fatalf("expected the screenshot's caption, got:\n%s", md)
 	}
-	for _, unwanted := range []string{"Checkout screenshot", "checkout.png", "local file:", "Source:", "github.com/example/widgets/blob/abc123/"} {
+	for _, unwanted := range []string{"Checkout screenshot", "checkout.png", "kept with the run, not published", "Source:", "github.com/example/widgets/blob/abc123/"} {
 		if strings.Contains(md, unwanted) {
 			t.Fatalf("a screenshot must render as its caption only, found %q, got:\n%s", unwanted, md)
 		}
@@ -884,8 +884,8 @@ func TestBuildTestingSummaryForPR_PrefersArtifactURLOverLocalPath(t *testing.T) 
 	if !strings.Contains(md, "- Evidence: [Checkout log](https://example.com/checkout.log)") {
 		t.Fatalf("expected artifact URL to take precedence, got:\n%s", md)
 	}
-	if strings.Contains(md, "local file:") || strings.Contains(md, localPath) {
-		t.Fatalf("did not expect local path to replace URL, got:\n%s", md)
+	if strings.Contains(md, "kept with the run, not published") || strings.Contains(md, localPath) {
+		t.Fatalf("the URL must be the artifact's only reference, with no local path or kept-with-the-run line beside it, got:\n%s", md)
 	}
 }
 
