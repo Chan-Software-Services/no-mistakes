@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -437,10 +438,10 @@ func TestWorktreeAddSurvivesAPruneDeletingTheEmptyWorktreesDirectory(t *testing.
 	worktrees := filepath.Join(bare, "worktrees")
 
 	stop := make(chan struct{})
-	pruned := make(chan int)
+	done := make(chan struct{})
+	prunes := 0
 	go func() {
-		n := 0
-		defer func() { pruned <- n }()
+		defer close(done)
 		for {
 			select {
 			case <-stop:
@@ -448,9 +449,16 @@ func TestWorktreeAddSurvivesAPruneDeletingTheEmptyWorktreesDirectory(t *testing.
 			default:
 			}
 			_ = exec.Command("git", "--git-dir="+bare, "worktree", "prune").Run()
-			n++
+			prunes++
 		}
 	}()
+	// Every exit, a t.Fatal included, stops the prunes before the gate's
+	// directory is cleaned up (cleanups run last registered first).
+	stopPrunes := sync.OnceFunc(func() {
+		close(stop)
+		<-done
+	})
+	t.Cleanup(stopPrunes)
 
 	const adds = 200
 	var failures []string
@@ -468,8 +476,7 @@ func TestWorktreeAddSurvivesAPruneDeletingTheEmptyWorktreesDirectory(t *testing.
 			t.Fatalf("WorktreeRemove: %v", err)
 		}
 	}
-	close(stop)
-	prunes := <-pruned
+	stopPrunes()
 	t.Logf("%d adds, %d prunes", adds, prunes)
 	if len(failures) > 0 {
 		t.Fatalf("%d of %d adds failed while prunes ran, first: %s", len(failures), adds, failures[0])
