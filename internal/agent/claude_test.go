@@ -148,25 +148,25 @@ func TestParseClaudeEvents_ResultEvent(t *testing.T) {
 	line, _ := json.Marshal(event)
 
 	var usage TokenUsage
-	var result *claudeResult
+	var stream claudeStream
 
 	err := parseClaudeEvents(
 		context.Background(),
 		bytes.NewReader(append(line, '\n')),
 		nil,
 		&usage,
-		&result,
+		&stream,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == nil {
+	if stream.result == nil {
 		t.Fatal("expected result event")
 	}
-	if result.Subtype != "success" {
-		t.Errorf("expected subtype 'success', got %q", result.Subtype)
+	if stream.result.Subtype != "success" {
+		t.Errorf("expected subtype 'success', got %q", stream.result.Subtype)
 	}
-	if result.StructuredOutput == nil {
+	if stream.result.StructuredOutput == nil {
 		t.Fatal("expected structured_output")
 	}
 }
@@ -221,14 +221,14 @@ func TestParseClaudeEvents_MultipleEvents(t *testing.T) {
 
 	var chunks []string
 	var usage TokenUsage
-	var result *claudeResult
+	var stream claudeStream
 
 	err := parseClaudeEvents(
 		context.Background(),
 		strings.NewReader(events),
 		func(text string) { chunks = append(chunks, text) },
 		&usage,
-		&result,
+		&stream,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -249,7 +249,7 @@ func TestParseClaudeEvents_MultipleEvents(t *testing.T) {
 	if usage.OutputTokens != 50 {
 		t.Errorf("expected accumulated output tokens 50, got %d", usage.OutputTokens)
 	}
-	if result == nil {
+	if stream.result == nil {
 		t.Fatal("expected result event")
 	}
 }
@@ -385,16 +385,16 @@ func TestParseClaudeEvents_ErrorResult(t *testing.T) {
 	events := `{"type":"result","subtype":"error","is_error":true,"structured_output":null,"usage":{"input_tokens":0,"output_tokens":0}}
 `
 	var usage TokenUsage
-	var result *claudeResult
+	var stream claudeStream
 
-	err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result)
+	err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &stream)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == nil {
+	if stream.result == nil {
 		t.Fatal("expected result")
 	}
-	if !result.IsError {
+	if !stream.result.IsError {
 		t.Error("expected IsError to be true")
 	}
 }
@@ -495,20 +495,20 @@ func TestParseClaudeEvents_ResultCapturesRawEvent(t *testing.T) {
 	events := `{"type":"result","subtype":"success","is_error":false,"structured_output":null}` + "\n"
 
 	var usage TokenUsage
-	var result *claudeResult
+	var stream claudeStream
 
-	err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result)
+	err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &stream)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == nil {
+	if stream.result == nil {
 		t.Fatal("expected result event")
 	}
-	if result.rawEvent == nil {
+	if stream.result.rawEvent == nil {
 		t.Fatal("expected rawEvent to be captured")
 	}
-	if !strings.Contains(string(result.rawEvent), `"subtype":"success"`) {
-		t.Errorf("rawEvent should contain original JSON, got: %s", string(result.rawEvent))
+	if !strings.Contains(string(stream.result.rawEvent), `"subtype":"success"`) {
+		t.Errorf("rawEvent should contain original JSON, got: %s", string(stream.result.rawEvent))
 	}
 }
 
@@ -725,6 +725,9 @@ func TestClaudeStdinHelper(t *testing.T) {
 		for {
 			time.Sleep(time.Second)
 		}
+	case "stream":
+		runClaudeStreamHelper()
+		return
 	case "read":
 		prompt, err := io.ReadAll(os.Stdin)
 		if err != nil {

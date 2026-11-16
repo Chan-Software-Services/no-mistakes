@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 func runClaude(args []string, promptReader io.Reader, scenario *Scenario) int {
@@ -27,6 +28,16 @@ func runClaude(args []string, promptReader io.Reader, scenario *Scenario) int {
 	if err := writeEvidence(prompt, action.WriteEvidence); err != nil {
 		fmt.Fprintf(os.Stderr, "fakeagent: %v\n", err)
 		return 1
+	}
+
+	defer lingerClaude(action)
+	if len(action.ClaudeStream) > 0 {
+		for _, line := range action.ClaudeStream {
+			if _, err := io.WriteString(os.Stdout, line+"\n"); err != nil {
+				return 1
+			}
+		}
+		return 0
 	}
 
 	// Fixture mode: replay the real claude wire envelope captured by
@@ -87,8 +98,20 @@ func runClaude(args []string, promptReader io.Reader, scenario *Scenario) int {
 	return 0
 }
 
-// patchClaudeFixture rewrites the result event's structured_output to
-// match the scenario action, leaving every other event byte-for-byte.
+// lingerClaude keeps the process alive for the action's linger_ms after its
+// last line, stdout still open, as a session kept awake by its own
+// background tasks does after the turn's report.
+func lingerClaude(action Action) {
+	if action.LingerMS > 0 {
+		time.Sleep(time.Duration(action.LingerMS) * time.Millisecond)
+	}
+}
+
+// patchClaudeFixture rewrites the result event's structured_output, and the
+// recorded StructuredOutput tool call's input, to match the scenario action,
+// leaving every other event byte-for-byte. The adapter reads an accepted
+// StructuredOutput call as well as the result event, so both must carry the
+// scenario's body or the patched fixture would disagree with itself.
 // The result event is identified as the one whose top-level "type" is
 // "result" — there's exactly one per session in stream-json output.
 //
@@ -120,7 +143,7 @@ func patchClaudeFixture(raw []byte, action Action) ([]byte, error) {
 		}
 		if probe.Type == "assistant" {
 			seenAssistant = true
-			patched, err := patchClaudeAssistantEvent(line, text)
+			patched, err := patchClaudeAssistantEvent(line, text, structuredJSON)
 			if err != nil {
 				return nil, err
 			}
@@ -134,7 +157,7 @@ func patchClaudeFixture(raw []byte, action Action) ([]byte, error) {
 			continue
 		}
 		if !seenAssistant {
-			assistant, err := patchClaudeAssistantEvent([]byte(`{"type":"assistant","message":{"content":[]}}`), text)
+			assistant, err := patchClaudeAssistantEvent([]byte(`{"type":"assistant","message":{"content":[]}}`), text, structuredJSON)
 			if err != nil {
 				return nil, err
 			}
@@ -158,14 +181,14 @@ func patchClaudeFixture(raw []byte, action Action) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-func patchClaudeAssistantEvent(line []byte, text string) ([]byte, error) {
+func patchClaudeAssistantEvent(line []byte, text string, structuredJSON []byte) ([]byte, error) {
 	var event map[string]any
 	if err := json.Unmarshal(line, &event); err != nil {
 		return nil, fmt.Errorf("parse assistant event: %w", err)
 	}
 	message, _ := event["message"].(map[string]any)
 	if message != nil {
-		message["content"] = patchClaudeAssistantContent(message["content"], text)
+		message["content"] = patchClaudeAssistantContent(message["content"], text, structuredJSON)
 		event["message"] = message
 	}
 	patched, err := json.Marshal(event)
@@ -175,7 +198,7 @@ func patchClaudeAssistantEvent(line []byte, text string) ([]byte, error) {
 	return patched, nil
 }
 
-func patchClaudeAssistantContent(raw any, text string) []any {
+func patchClaudeAssistantContent(raw any, text string, structuredJSON []byte) []any {
 	items, _ := raw.([]any)
 	if len(items) == 0 {
 		return []any{map[string]any{"type": "text", "text": text}}
@@ -186,6 +209,15 @@ func patchClaudeAssistantContent(raw any, text string) []any {
 		content, ok := item.(map[string]any)
 		if !ok {
 			patched = append(patched, item)
+			continue
+		}
+		if content["type"] == "tool_use" && content["name"] == "StructuredOutput" {
+			copyItem := make(map[string]any, len(content))
+			for k, v := range content {
+				copyItem[k] = v
+			}
+			copyItem["input"] = json.RawMessage(structuredJSON)
+			patched = append(patched, copyItem)
 			continue
 		}
 		if content["type"] != "text" {

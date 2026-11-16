@@ -72,18 +72,18 @@ func TestParseClaudeEvents_CapturesSessionID(t *testing.T) {
 {"type":"result","subtype":"success","session_id":"0dc121a5-fbc0-4e5a-ae81-5851cc03ca1b","usage":{"input_tokens":1,"output_tokens":1}}
 `
 	var usage TokenUsage
-	var result *claudeResult
-	if err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result); err != nil {
+	var stream claudeStream
+	if err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &stream); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if result == nil {
+	if stream.result == nil {
 		t.Fatal("expected result event")
 	}
-	if result.sessionID != "0dc121a5-fbc0-4e5a-ae81-5851cc03ca1b" {
-		t.Fatalf("sessionID = %q, want the stream session id", result.sessionID)
+	if stream.result.sessionID != "0dc121a5-fbc0-4e5a-ae81-5851cc03ca1b" {
+		t.Fatalf("sessionID = %q, want the stream session id", stream.result.sessionID)
 	}
-	if result.model != "claude-opus-4-8" {
-		t.Fatalf("model = %q, want claude-opus-4-8", result.model)
+	if stream.result.model != "claude-opus-4-8" {
+		t.Fatalf("model = %q, want claude-opus-4-8", stream.result.model)
 	}
 }
 
@@ -93,12 +93,12 @@ func TestParseClaudeEvents_SessionIDFallsBackToLastSeen(t *testing.T) {
 {"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}
 `
 	var usage TokenUsage
-	var result *claudeResult
-	if err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &result); err != nil {
+	var stream claudeStream
+	if err := parseClaudeEvents(context.Background(), strings.NewReader(events), nil, &usage, &stream); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if result == nil || result.sessionID != "sess-a" {
-		t.Fatalf("expected fallback session id sess-a, got %+v", result)
+	if stream.result == nil || stream.result.sessionID != "sess-a" {
+		t.Fatalf("expected fallback session id sess-a, got %+v", stream.result)
 	}
 }
 

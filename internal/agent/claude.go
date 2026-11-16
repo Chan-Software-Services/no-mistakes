@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 )
@@ -21,6 +24,26 @@ const claudeMaxRetries = 3
 
 // errNoStructuredOutput is returned when Claude succeeds but omits structured output.
 var errNoStructuredOutput = errors.New("claude returned no structured output")
+
+// claudeTurnRanToolsError marks a no-structured-output rejection whose turn
+// ran a tool other than StructuredOutput, so claudeRetryClassifier never
+// replays it. Its message is the rejection's own.
+type claudeTurnRanToolsError struct{ err error }
+
+func (e *claudeTurnRanToolsError) Error() string { return e.err.Error() }
+func (e *claudeTurnRanToolsError) Unwrap() error { return e.err }
+
+// claudeAcceptedOutputExitGrace is how long a session may stay alive after
+// the CLI first accepted its structured output before the adapter ends its
+// process group and keeps the accepted payload. A normal turn exits within a
+// second or two of its acceptance; the recorded sessions that lingered (kept
+// awake by their own background watches) did so for 5 to 10 minutes, long
+// enough to be cut as a stall. A package variable so tests can shorten it.
+var claudeAcceptedOutputExitGrace = 60 * time.Second
+
+// claudeStructuredOutputTool is the tool Claude Code gives the model for its
+// --json-schema output.
+const claudeStructuredOutputTool = "StructuredOutput"
 
 const claudeScannerMaxTokenSize = 256 * 1024 * 1024
 
@@ -98,23 +121,69 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	}()
 
 	var usage TokenUsage
-	var result *claudeResult
-	if err := parseClaudeEvents(ctx, started.stdout, opts.OnChunk, &usage, &result); err != nil {
-		err = started.waitAfterParseError(err)
-		stderrWG.Wait()
-		retErr := fmt.Errorf("claude parse events: %w", err)
+	stream := &claudeStream{}
+	var lingered atomic.Bool
+	var lingerTimer *time.Timer
+	if len(opts.JSONSchema) > 0 {
+		// The parser calls this on the goroutine that later stops the timer,
+		// so lingerTimer needs no lock. The clock starts at the first
+		// acceptance and is never restarted by a later one.
+		stream.onFirstAccept = func() {
+			lingerTimer = time.AfterFunc(claudeAcceptedOutputExitGrace, func() {
+				lingered.Store(true)
+				started.terminate()
+			})
+		}
+	}
+	parseErr := parseClaudeEvents(ctx, started.stdout, opts.OnChunk, &usage, stream)
+	var waitErr error
+	if parseErr != nil {
+		parseErr = started.waitAfterParseError(parseErr)
+	} else {
+		waitErr = started.wait()
+	}
+	if lingerTimer != nil {
+		lingerTimer.Stop()
+	}
+	stderrWG.Wait()
+
+	// The report the CLI accepted is the turn's result, whatever the session
+	// did after it: a later turn's result event without output, a non-success
+	// subtype, a failed read of the stream, or a non-zero exit. Only the
+	// caller's own context ending outranks it, and then the paths below
+	// return what they returned before.
+	if len(opts.JSONSchema) > 0 && stream.accepted != nil && ctx.Err() == nil {
+		if opts.OnChunk != nil {
+			if lingered.Load() {
+				opts.OnChunk(fmt.Sprintf("claude: structured output was accepted but the session did not exit within %s; ended it", claudeAcceptedOutputExitGrace))
+			} else if ignored := stream.ignoredAfterAcceptance(parseErr, waitErr); ignored != "" {
+				opts.OnChunk("claude: structured output was accepted; ignored what followed (" + ignored + ")")
+			}
+		}
+		res := &Result{
+			Output:                stream.accepted,
+			Text:                  stream.acceptedText,
+			Usage:                 usage,
+			UsageReported:         usage.Reported,
+			CacheCreationReported: usage.CacheCreationReported,
+		}
+		a.stampClaudeResult(res, stream.sessionID, stream.model, resumeID)
+		emitAgentExited(opts, "claude", pid, nil)
+		return res, nil
+	}
+
+	if parseErr != nil {
+		retErr := fmt.Errorf("claude parse events: %w", parseErr)
 		emitAgentExited(opts, "claude", pid, retErr)
 		return resultFromUsage(usage), retErr
 	}
-
-	waitErr := started.wait()
-	stderrWG.Wait()
 	if waitErr != nil {
 		retErr := fmt.Errorf("claude exited: %w: %s", waitErr, string(stderrBuf))
 		emitAgentExited(opts, "claude", pid, retErr)
 		return resultFromUsage(usage), retErr
 	}
 
+	result := stream.result
 	if result == nil {
 		retErr := fmt.Errorf("claude returned no result event")
 		emitAgentExited(opts, "claude", pid, retErr)
@@ -123,26 +192,42 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 
 	res, err := finalizeClaudeResult(result, opts.JSONSchema, usage)
 	if res != nil {
-		res.SessionID = result.sessionID
-		res.Resumed = resumeID != ""
-		res.Model = result.model
-		// Claude reports cache-creation cost per message, so the accumulated
-		// value is meaningful (recorded as a real number, not unknown). Its
-		// stream-json usage is per-invocation, not cumulative across --resume,
-		// so SessionUsageCumulative stays false and per-round deltas equal the
-		// raw counters.
-		res.CacheCreationReported = res.UsageReported
-		if result.model != "" {
-			res.ModelProvider = "anthropic"
-		}
+		a.stampClaudeResult(res, result.sessionID, result.model, resumeID)
 	}
 	if errors.Is(err, errNoStructuredOutput) && opts.OnChunk != nil {
 		opts.OnChunk(fmt.Sprintf("structured output missing: subtype=%s, text_len=%d, input_tokens=%d, output_tokens=%d",
 			result.Subtype, len(result.text), usage.InputTokens, usage.OutputTokens))
 		opts.OnChunk(fmt.Sprintf("raw result event: %s", string(result.rawEvent)))
 	}
+	if errors.Is(err, errNoStructuredOutput) && stream.ranTools {
+		// Replaying a turn that ran tools runs them again in a fresh session:
+		// for a Test turn that is a second full live validation, with its own
+		// side effects, inside the same budget. Only a pure prompt-to-JSON
+		// turn keeps its cheap retry (claudeRetryClassifier).
+		if opts.OnChunk != nil {
+			opts.OnChunk("claude returned no structured output after running tools; not replaying the turn")
+		}
+		err = &claudeTurnRanToolsError{err: err}
+	}
 	emitAgentExited(opts, "claude", pid, err)
 	return res, err
+}
+
+// stampClaudeResult records the session, model and cache-reporting facts the
+// stream carried on a Result.
+func (a *claudeAgent) stampClaudeResult(res *Result, sessionID, model, resumeID string) {
+	res.SessionID = sessionID
+	res.Resumed = resumeID != ""
+	res.Model = model
+	// Claude reports cache-creation cost per message, so the accumulated
+	// value is meaningful (recorded as a real number, not unknown). Its
+	// stream-json usage is per-invocation, not cumulative across --resume,
+	// so SessionUsageCumulative stays false and per-round deltas equal the
+	// raw counters.
+	res.CacheCreationReported = res.UsageReported
+	if model != "" {
+		res.ModelProvider = "anthropic"
+	}
 }
 
 func (a *claudeAgent) Close() error { return nil }
@@ -151,7 +236,7 @@ func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage To
 	if result.IsError || result.Subtype != "success" {
 		return resultFromUsage(usage), fmt.Errorf("claude error: subtype=%s", result.Subtype)
 	}
-	if len(schema) > 0 && result.StructuredOutput == nil {
+	if len(schema) > 0 && !claudeHasPayload(result.StructuredOutput) {
 		return resultFromUsage(usage), rejectStructuredOutput(errNoStructuredOutput)
 	}
 
@@ -283,6 +368,69 @@ type claudeResult struct {
 	rawEvent         json.RawMessage
 	sessionID        string // durable session identity from the event stream
 	model            string // model reported by assistant events
+	seq              int    // position of the event in the stream
+}
+
+// claudeStream is what one invocation's stream-json said, read in stream
+// order. A payload counts as accepted when the CLI accepted a StructuredOutput
+// tool call (its tool_result is not an error) or when a result event carries
+// structured_output; the latest acceptance from either source is the
+// invocation's output. Both sources are read because a session may go on
+// after its report: background tasks wake it for more turns, and the last
+// turn's result event then carries no structured_output.
+type claudeStream struct {
+	result       *claudeResult   // the last result event
+	accepted     json.RawMessage // the latest accepted payload
+	acceptedText string          // assistant text up to that acceptance
+	acceptedSeq  int
+	ranTools     bool // a tool other than StructuredOutput was called
+	sessionID    string
+	model        string
+
+	// structuredCalls holds each StructuredOutput call's input until its
+	// tool_result says whether the CLI accepted it.
+	structuredCalls map[string]json.RawMessage
+	// onFirstAccept, when set, is called once, at the first acceptance.
+	onFirstAccept func()
+}
+
+func (s *claudeStream) accept(payload json.RawMessage, text string, seq int) {
+	first := s.accepted == nil
+	s.accepted = append(json.RawMessage(nil), payload...)
+	s.acceptedText = text
+	s.acceptedSeq = seq
+	if first && s.onFirstAccept != nil {
+		s.onFirstAccept()
+	}
+}
+
+// ignoredAfterAcceptance names what the stream and the process did after the
+// latest acceptance that would otherwise have failed the invocation, or ""
+// when nothing did.
+func (s *claudeStream) ignoredAfterAcceptance(parseErr, waitErr error) string {
+	var parts []string
+	switch r := s.result; {
+	case r == nil || r.seq < s.acceptedSeq:
+		parts = append(parts, "no result event after it")
+	case r.IsError || r.Subtype != "success":
+		parts = append(parts, "a result event with subtype="+r.Subtype)
+	case r.seq > s.acceptedSeq:
+		parts = append(parts, "a later result event without structured output")
+	}
+	if parseErr != nil {
+		parts = append(parts, "reading the stream failed: "+parseErr.Error())
+	}
+	if waitErr != nil {
+		parts = append(parts, "the process exited: "+waitErr.Error())
+	}
+	return strings.Join(parts, "; ")
+}
+
+// claudeHasPayload reports whether a structured-output slot holds a payload:
+// absent and JSON null both mean none.
+func claudeHasPayload(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
 type claudeUsage struct {
@@ -298,19 +446,30 @@ type claudeMessage struct {
 	Content []claudeContent `json:"content"`
 }
 
+// claudeContent is one content block of an assistant or user message: text,
+// a tool_use (ID, Name, Input) or a tool_result (ToolUseID, IsError).
 type claudeContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	IsError   bool            `json:"is_error"`
 }
 
 // parseClaudeEvents reads JSONL from the reader and dispatches events.
-// It accumulates token usage and captures the final result event.
-func parseClaudeEvents(ctx context.Context, r io.Reader, onChunk func(string), usage *TokenUsage, result **claudeResult) error {
+// It accumulates token usage and records into stream (when non-nil) the
+// result events, the StructuredOutput calls the CLI accepted, and whether
+// any other tool ran.
+func parseClaudeEvents(ctx context.Context, r io.Reader, onChunk func(string), usage *TokenUsage, stream *claudeStream) error {
+	if stream == nil {
+		stream = &claudeStream{}
+	}
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), claudeScannerMaxTokenSize)
 	var textBuf string
-	var lastSessionID string
-	var lastModel string
+	seq := 0
 
 	for scanner.Scan() {
 		select {
@@ -328,8 +487,9 @@ func parseClaudeEvents(ctx context.Context, r io.Reader, onChunk func(string), u
 		if err := json.Unmarshal(line, &event); err != nil {
 			continue // skip malformed lines
 		}
+		seq++
 		if event.SessionID != "" {
-			lastSessionID = event.SessionID
+			stream.sessionID = event.SessionID
 		}
 
 		switch event.Type {
@@ -339,7 +499,7 @@ func parseClaudeEvents(ctx context.Context, r io.Reader, onChunk func(string), u
 				continue
 			}
 			if msg.Model != "" {
-				lastModel = msg.Model
+				stream.model = msg.Model
 			}
 			usage.Add(TokenUsage{
 				InputTokens:           msg.Usage.InputTokens,
@@ -350,27 +510,65 @@ func parseClaudeEvents(ctx context.Context, r io.Reader, onChunk func(string), u
 				CacheCreationReported: true,
 			})
 			for _, c := range msg.Content {
-				if c.Type == "text" && c.Text != "" {
-					textBuf += c.Text
-					if onChunk != nil {
-						onChunk(c.Text)
+				switch c.Type {
+				case "text":
+					if c.Text != "" {
+						textBuf += c.Text
+						if onChunk != nil {
+							onChunk(c.Text)
+						}
+					}
+				case "tool_use":
+					if c.Name != claudeStructuredOutputTool {
+						stream.ranTools = true
+						continue
+					}
+					if c.ID != "" && claudeHasPayload(c.Input) {
+						if stream.structuredCalls == nil {
+							stream.structuredCalls = map[string]json.RawMessage{}
+						}
+						stream.structuredCalls[c.ID] = append(json.RawMessage(nil), c.Input...)
 					}
 				}
 			}
 
-		case "result":
-			if result != nil {
-				raw := make(json.RawMessage, len(line))
-				copy(raw, line)
-				*result = &claudeResult{
-					Subtype:          event.Subtype,
-					IsError:          event.IsError,
-					StructuredOutput: event.StructuredOutput,
-					text:             textBuf,
-					rawEvent:         raw,
-					sessionID:        lastSessionID,
-					model:            lastModel,
+		case "user":
+			// A user message's content may be a plain string (a prompt) rather
+			// than blocks; only tool_result blocks matter here, so a message
+			// that does not decode as blocks is skipped.
+			var msg claudeMessage
+			if err := json.Unmarshal(event.Message, &msg); err != nil {
+				continue
+			}
+			for _, c := range msg.Content {
+				if c.Type != "tool_result" {
+					continue
 				}
+				input, ok := stream.structuredCalls[c.ToolUseID]
+				if !ok {
+					continue
+				}
+				delete(stream.structuredCalls, c.ToolUseID)
+				if !c.IsError {
+					stream.accept(input, textBuf, seq)
+				}
+			}
+
+		case "result":
+			raw := make(json.RawMessage, len(line))
+			copy(raw, line)
+			stream.result = &claudeResult{
+				Subtype:          event.Subtype,
+				IsError:          event.IsError,
+				StructuredOutput: event.StructuredOutput,
+				text:             textBuf,
+				rawEvent:         raw,
+				sessionID:        stream.sessionID,
+				model:            stream.model,
+				seq:              seq,
+			}
+			if claudeHasPayload(event.StructuredOutput) {
+				stream.accept(event.StructuredOutput, textBuf, seq)
 			}
 		}
 	}

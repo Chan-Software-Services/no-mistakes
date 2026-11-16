@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPatchClaudeFixtureStructuredRunRewritesAssistantText(t *testing.T) {
@@ -127,5 +131,125 @@ func TestPatchClaudeFixtureStructuredRunPreservesNonTextAssistantContent(t *test
 	}
 	if assistant.Message.Content[2]["type"] != "text" || assistant.Message.Content[2]["text"] != "scenario text" {
 		t.Fatalf("third content = %+v, want patched text item", assistant.Message.Content[2])
+	}
+}
+
+// captureClaudeStdout swaps os.Stdout for a pipe for the duration of the
+// test and returns its read end.
+func captureClaudeStdout(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		_ = r.Close()
+		_ = w.Close()
+	})
+	return r, w
+}
+
+func TestRunClaudeWritesClaudeStreamVerbatim(t *testing.T) {
+	t.Setenv("FAKEAGENT_FIXTURE", "")
+	t.Setenv("FAKEAGENT_LOG", "")
+	stream := []string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"StructuredOutput","input":{"verdict":"go"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"Structured output provided successfully"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false}`,
+	}
+	r, w := captureClaudeStdout(t)
+	status := runClaude([]string{"-p", "--json-schema", "{}"}, strings.NewReader("validate"), &Scenario{Actions: []Action{{
+		ClaudeStream: stream,
+		Structured:   map[string]any{"verdict": "never emitted"},
+	}}})
+	_ = w.Close()
+	var out bytes.Buffer
+	_, _ = out.ReadFrom(r)
+	if status != 0 {
+		t.Fatalf("runClaude() status = %d", status)
+	}
+	if want := strings.Join(stream, "\n") + "\n"; out.String() != want {
+		t.Fatalf("stdout = %q, want the scripted stream verbatim %q", out.String(), want)
+	}
+}
+
+func TestRunClaudeLingersWithStdoutOpenAfterItsLastLine(t *testing.T) {
+	t.Setenv("FAKEAGENT_FIXTURE", "")
+	t.Setenv("FAKEAGENT_LOG", "")
+	const linger = 400 * time.Millisecond
+	line := `{"type":"result","subtype":"success","is_error":false,"structured_output":{"ok":true}}`
+	r, _ := captureClaudeStdout(t)
+	done := make(chan int, 1)
+	started := time.Now()
+	go func() {
+		done <- runClaude([]string{"-p", "--json-schema", "{}"}, strings.NewReader("validate"), &Scenario{Actions: []Action{{
+			ClaudeStream: []string{line},
+			LingerMS:     int(linger / time.Millisecond),
+		}}})
+	}()
+	got, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read the scripted line: %v", err)
+	}
+	if got != line+"\n" {
+		t.Fatalf("first line = %q, want %q", got, line)
+	}
+	select {
+	case status := <-done:
+		t.Fatalf("runClaude returned %d right after its last line, want it to linger %s", status, linger)
+	default:
+	}
+	if status := <-done; status != 0 {
+		t.Fatalf("runClaude() status = %d", status)
+	}
+	if elapsed := time.Since(started); elapsed < linger {
+		t.Fatalf("runClaude returned after %s, want at least the %s linger", elapsed, linger)
+	}
+}
+
+func TestPatchClaudeFixtureRewritesTheStructuredOutputToolCallInput(t *testing.T) {
+	raw := []byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"StructuredOutput","input":{"risk_level":"recorded"}},{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"go test"}}]}}` + "\n" +
+		`{"type":"result","result":"recorded result","structured_output":{"risk_level":"recorded"}}` + "\n")
+	patched, err := patchClaudeFixture(raw, Action{
+		Text:       "scenario text",
+		Structured: map[string]any{"summary": "patched summary"},
+	})
+	if err != nil {
+		t.Fatalf("patchClaudeFixture: %v", err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(patched), []byte("\n"))
+	var assistant struct {
+		Message struct {
+			Content []struct {
+				Type  string          `json:"type"`
+				ID    string          `json:"id"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(lines[0], &assistant); err != nil {
+		t.Fatalf("unmarshal assistant event: %v", err)
+	}
+	var structuredCall, bashCall json.RawMessage
+	for _, c := range assistant.Message.Content {
+		switch c.Name {
+		case "StructuredOutput":
+			if c.ID != "toolu_1" {
+				t.Fatalf("StructuredOutput call id = %q, want the recorded toolu_1", c.ID)
+			}
+			structuredCall = c.Input
+		case "Bash":
+			bashCall = c.Input
+		}
+	}
+	if string(structuredCall) != `{"summary":"patched summary"}` {
+		t.Fatalf("StructuredOutput input = %s, want the scenario's body", structuredCall)
+	}
+	if string(bashCall) != `{"command":"go test"}` {
+		t.Fatalf("another tool's input = %s, want it untouched", bashCall)
 	}
 }
