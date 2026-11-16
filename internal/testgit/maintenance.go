@@ -24,7 +24,10 @@ func NoAutoMaintenance() []string {
 // AutoMaintenanceStarts reads a GIT_TRACE2 trace file and returns the
 // command line of each child that started git's auto-maintenance
 // (`git maintenance run --auto` or `git gc --auto`). A missing or empty trace
-// is an error, since then git never traced and nothing was checked.
+// is an error, since then git never traced and nothing was checked. A check
+// built on it assumes git 2.29 or later: an older git has no
+// maintenance.auto, so a commit there still starts `git gc --auto`, which
+// gc.auto=0 makes do nothing but which this still counts as a start.
 func AutoMaintenanceStarts(trace string) ([]string, error) {
 	data, err := os.ReadFile(trace)
 	if err != nil {

@@ -14,7 +14,7 @@ func TestNoAutoMaintenanceKeepsACommitFromStartingMaintenance(t *testing.T) {
 	t.Parallel()
 	gitBin, err := RealGit()
 	if err != nil {
-		t.Skip(err)
+		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
