@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -106,4 +107,91 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// TurnOffAutoMaintenance reaches a git the test process starts without being
+// handed any option, which is how the code under test runs git, and keeps any
+// configuration pairs already in the environment.
+func TestTurnOffAutoMaintenanceKeepsThePlainCommitOfTheProcessFromStartingMaintenance(t *testing.T) {
+	// A contributor's own maintenance.auto=false must not reach the commit,
+	// or the check below would pass without TurnOffAutoMaintenance.
+	userConfig := filepath.Join(t.TempDir(), "user-gitconfig")
+	if err := os.WriteFile(userConfig, []byte("[maintenance]\n\tauto = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", userConfig)
+	gitBin := isolatedGit(t)
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
+	t.Setenv("GIT_CONFIG_VALUE_0", "kept")
+	dir := t.TempDir()
+	run(t, gitBin, dir, "init")
+	if out, err := exec.Command(gitBin, "-C", dir, "config", "--get", "maintenance.auto").Output(); err == nil {
+		t.Fatalf("maintenance.auto = %q from the contributor's global config, want it shut out", strings.TrimSpace(string(out)))
+	}
+	trace := TraceGit(t)
+	TurnOffAutoMaintenance(t)
+
+	run(t, gitBin, dir, "commit", "--allow-empty", "-m", "quiet")
+	RequireNoAutoMaintenance(t, trace)
+	if got := run(t, gitBin, dir, "config", "user.name"); got != "kept" {
+		t.Fatalf("user.name = %q, want the pair already in the environment kept", got)
+	}
+}
+
+// A local push's receive-pack does not see GIT_CONFIG_COUNT, so the
+// environment alone leaves it starting auto-maintenance in the repository
+// pushed into; that repository's own config stops it.
+func TestTurnOffRepoAutoMaintenanceKeepsALocalPushFromStartingMaintenance(t *testing.T) {
+	gitBin := isolatedGit(t)
+	TurnOffAutoMaintenance(t)
+	work := t.TempDir()
+	run(t, gitBin, work, "init")
+	run(t, gitBin, work, "commit", "--allow-empty", "-m", "base")
+	plainGate := filepath.Join(t.TempDir(), "plain.git")
+	quietGate := filepath.Join(t.TempDir(), "quiet.git")
+	run(t, gitBin, work, "init", "--bare", plainGate)
+	run(t, gitBin, work, "init", "--bare", quietGate)
+	TurnOffRepoAutoMaintenance(t, quietGate)
+
+	plain := TraceGit(t)
+	run(t, gitBin, work, "push", plainGate, "HEAD:refs/heads/main")
+	if starts := autoMaintenanceStarts(t, plain); len(starts) == 0 {
+		t.Fatalf("a local push into a gate without the config started no auto-maintenance; trace:\n%s", readFile(t, plain))
+	}
+
+	quiet := TraceGit(t)
+	run(t, gitBin, work, "push", quietGate, "HEAD:refs/heads/main")
+	RequireNoAutoMaintenance(t, quiet)
+}
+
+// isolatedGit returns the real git with the contributor's own global and
+// system config out of the way, so their maintenance.auto=false cannot make
+// a check pass.
+func isolatedGit(t *testing.T) string {
+	t.Helper()
+	gitBin, err := RealGit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	IgnoreUserGitConfig(t)
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	for _, kv := range [][2]string{
+		{"GIT_AUTHOR_NAME", "test"}, {"GIT_AUTHOR_EMAIL", "test@test.com"},
+		{"GIT_COMMITTER_NAME", "test"}, {"GIT_COMMITTER_EMAIL", "test@test.com"},
+	} {
+		t.Setenv(kv[0], kv[1])
+	}
+	return gitBin
+}
+
+func run(t *testing.T, gitBin, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(gitBin, args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
 }

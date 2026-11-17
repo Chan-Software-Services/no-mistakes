@@ -9,7 +9,9 @@
 // It also holds the git options a test helper that builds a repository and
 // then copies or walks it runs its committing git calls with, so no background
 // auto-maintenance can change the repository under the copy (see
-// NoAutoMaintenance).
+// NoAutoMaintenance), and the ways a test turns it off for git calls the code
+// under test makes (TurnOffAutoMaintenance, TurnOffRepoAutoMaintenance) and
+// checks that none started (TraceGit, RequireNoAutoMaintenance).
 package testgit
 
 import (

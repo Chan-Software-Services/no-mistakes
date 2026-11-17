@@ -14,6 +14,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -28,6 +29,13 @@ import (
 // doubles the corpus, and with a shared object pool it adds almost nothing.
 func TestCaptureDoesNotCopyRepositoryHistoryPerCase(t *testing.T) {
 	ctx := context.Background()
+	// Capture's object-pool fetch otherwise starts a detached
+	// auto-maintenance in the pool, inside the tree dirSize walks; no run has
+	// yet shown that tree changing under the walk, and the trace check below
+	// keeps the start from coming back.
+	testgit.IgnoreUserGitConfig(t)
+	trace := testgit.TraceGit(t)
+	testgit.TurnOffAutoMaintenance(t)
 	p, sourceDB, run, repo, firstRound := setupCapturedRunWithHistory(t, ctx, 24)
 	defer sourceDB.Close()
 
@@ -62,6 +70,7 @@ func TestCaptureDoesNotCopyRepositoryHistoryPerCase(t *testing.T) {
 	if marginal > afterFirst/4 {
 		t.Fatalf("second case cost %d bytes on top of %d: history is being copied per case, not shared", marginal, afterFirst)
 	}
+	testgit.RequireNoAutoMaintenance(t, trace)
 }
 
 // TestObjectPoolEnablesLongPaths verifies that Git can create the case refs in
