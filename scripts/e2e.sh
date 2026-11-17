@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # Suite wrapper for temporary E2E daemon ownership.
 #
+# Usage:
+#   scripts/e2e.sh                  the whole suite in one go test process
+#   scripts/e2e.sh --shard <i>/<n>  shard i of n, as CI's e2e shard jobs run it
+#   scripts/e2e.sh <go test args>   go test with exactly these arguments
+#
+# A shard runs every n-th test of ./internal/e2e/... in name order (round-robin
+# from the i-th, from `go test -list`), so each test runs in exactly one
+# shard; shard 1 then runs the ./internal/pipeline/steps/... packages, in a
+# second go test so the -run filter does not reach them. The e2e tests cannot
+# use t.Parallel (each harness sets process-wide env with t.Setenv), so
+# separate processes on separate runners are what makes them run side by side.
+#
 # Responsibilities:
 #   1. Exact inventory directory (mode 0700) for this suite invocation
 #   2. EXIT/INT/TERM trap that reaps only inventoried temp daemons
@@ -16,6 +28,34 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
+
+# The whole suite's cap is half again over CI's slowest whole-package run
+# (477s before it was sharded). A shard's cap covers each of its go test
+# processes: its share of ./internal/e2e, which is about a third of the
+# package with three shards, and on shard 1 the steps packages.
+WHOLE_TIMEOUT=720s
+SHARD_TIMEOUT=480s
+E2E_PKGS=./internal/e2e/...
+STEPS_PKGS=./internal/pipeline/steps/...
+
+usage() {
+  printf 'usage: scripts/e2e.sh [--shard <i>/<n> | <go test args>...]\n' >&2
+}
+
+SHARD_INDEX=0
+SHARD_COUNT=0
+if [[ "${1:-}" == "--shard" ]]; then
+  if [[ "$#" -ne 2 || ! "$2" =~ ^([0-9]+)/([0-9]+)$ ]]; then
+    usage
+    exit 2
+  fi
+  SHARD_INDEX=$((10#${BASH_REMATCH[1]}))
+  SHARD_COUNT=$((10#${BASH_REMATCH[2]}))
+  if ((SHARD_COUNT < 1 || SHARD_INDEX < 1 || SHARD_INDEX > SHARD_COUNT)); then
+    usage
+    exit 2
+  fi
+fi
 
 if [[ -z "${NM_E2E_DAEMON_INVENTORY:-}" ]]; then
   base="/tmp"
@@ -56,12 +96,37 @@ fi
 
 trap 'reap_inventory; if [[ "${OWNED_INVENTORY}" -eq 1 ]]; then rm -rf "$NM_E2E_DAEMON_INVENTORY" 2>/dev/null || true; fi' EXIT INT TERM
 
-# Default args match the historical Makefile e2e target; callers may override.
+run_shard() {
+  local list names selected code=0
+  if ! list="$(go test -tags=e2e -list '.*' "$E2E_PKGS")"; then
+    printf '%s\n' "$list" >&2
+    return 1
+  fi
+  # Test names are the lines that are a bare identifier; each package's ok
+  # line has spaces in it. A name two packages share is one entry, and its
+  # shard's -run runs it in both.
+  names="$(printf '%s\n' "$list" | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' | LC_ALL=C sort -u)"
+  selected="$(printf '%s\n' "$names" | awk -v n="$SHARD_COUNT" -v i="$SHARD_INDEX" 'NF && (NR - 1) % n == i - 1')"
+  printf 'e2e.sh: shard %d/%d runs %d of the %d tests in %s\n' \
+    "$SHARD_INDEX" "$SHARD_COUNT" "$(printf '%s' "$selected" | grep -c .)" "$(printf '%s' "$names" | grep -c .)" "$E2E_PKGS" >&2
+  if [[ -n "$selected" ]]; then
+    go test -tags=e2e -count=1 -timeout "$SHARD_TIMEOUT" -run "^($(printf '%s' "$selected" | paste -sd '|' -))\$" "$E2E_PKGS" || code=$?
+  fi
+  if ((SHARD_INDEX == 1)); then
+    local steps=0
+    go test -tags=e2e -count=1 -timeout "$SHARD_TIMEOUT" "$STEPS_PKGS" || steps=$?
+    ((code != 0)) || code=$steps
+  fi
+  return "$code"
+}
+
+if ((SHARD_COUNT > 0)); then
+  run_shard
+  exit "$?"
+fi
+
 if [[ "$#" -eq 0 ]]; then
-  # The user-journey matrix runs native backends serially because each case
-  # owns process-wide environment. Four backends plus the remaining package
-  # journeys no longer fit the historical five-minute package budget.
-  set -- -tags=e2e -count=1 -timeout 480s ./internal/e2e/... ./internal/pipeline/steps/...
+  set -- -tags=e2e -count=1 -timeout "$WHOLE_TIMEOUT" "$E2E_PKGS" "$STEPS_PKGS"
 fi
 
 go test "$@"

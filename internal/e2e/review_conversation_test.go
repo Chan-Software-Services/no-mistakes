@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -560,13 +559,6 @@ func TestReviewConversationTUIYoloLeavesTheQuestionOpen(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed; it drives the TUI through a pty")
 	}
-	driver, err := filepath.Abs(filepath.Join("testdata", "tui_yolo_driver.py"))
-	if err != nil {
-		t.Fatalf("resolve tui driver: %v", err)
-	}
-	if _, err := os.Stat(driver); err != nil {
-		t.Fatalf("tui driver missing: %v", err)
-	}
 
 	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: reviewConversationScenario(t)})
 	pushMainRepoConfig(t, h, trustedRepoConfigWithReviewConversation)
@@ -589,15 +581,7 @@ func TestReviewConversationTUIYoloLeavesTheQuestionOpen(t *testing.T) {
 		t.Fatal("review step never parked for an answer")
 	}
 
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "python3", driver, h.NMBin, fw, "y", "6", "8")
-	cmd.Env = os.Environ()
-	screen, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("drive the TUI: %v\n%s", err, screen)
-	}
-	rendered := string(screen)
+	rendered := pressYoloInTheTUI(t, h, fw, branch, yoloStandAsideWindow)
 	if strings.Contains(rendered, "zero-sized grid") {
 		t.Fatalf("the TUI never rendered (zero-sized grid):\n%s", rendered)
 	}
@@ -818,22 +802,7 @@ func TestReviewConversationUnreadableQuestionHistoryNeedsAHuman(t *testing.T) {
 	// one of them is what let a question reach the fixer before.
 	if runtime.GOOS != "windows" {
 		if _, lookErr := exec.LookPath("python3"); lookErr == nil {
-			driver, derr := filepath.Abs(filepath.Join("testdata", "tui_yolo_driver.py"))
-			if derr != nil {
-				t.Fatalf("resolve tui driver: %v", derr)
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-			defer cancel()
-			// The same waits as the open-question TUI case: a shorter pre-wait
-			// drops the keypress on a loaded machine before the TUI has read
-			// its first frame, and yolo then never engages at all.
-			cmd := exec.CommandContext(ctx, "python3", driver, h.NMBin, fw, "y", "6", "8")
-			cmd.Env = os.Environ()
-			screen, cerr := cmd.Output()
-			if cerr != nil {
-				t.Fatalf("drive the TUI: %v\n%s", cerr, screen)
-			}
-			rendered := string(screen)
+			rendered := pressYoloInTheTUI(t, h, fw, branch, yoloStandAsideWindow)
 			if !strings.Contains(rendered, "end yolo") {
 				t.Fatalf("yolo mode never engaged in the TUI:\n%s", rendered)
 			}

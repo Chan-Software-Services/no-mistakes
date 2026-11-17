@@ -15,6 +15,15 @@ type eventMsg struct {
 // errMsg wraps an error from async operations.
 type errMsg struct{ err error }
 
+// yoloResponseFailedMsg is a response yolo sent to the gate step, parked at
+// status, that failed with err.
+type yoloResponseFailedMsg struct {
+	err    error
+	step   types.StepName
+	status types.StepStatus
+	action types.ApprovalAction
+}
+
 func (e errMsg) Error() string { return e.err.Error() }
 
 type subscriptionErrMsg struct {

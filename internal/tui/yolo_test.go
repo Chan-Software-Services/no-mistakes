@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -155,6 +156,218 @@ func TestModel_Yolo_OrdinaryReviewFindingsAreStillFixed(t *testing.T) {
 	calls := snapshot()
 	if len(calls) != 1 || calls[0].Action != types.ActionFix {
 		t.Fatalf("ordinary review findings were not fixed: %+v", calls)
+	}
+}
+
+// Yolo turned on while the TUI's authoritative read is still in flight (as it
+// is right after attaching) cannot act yet; the read's arrival must then
+// resolve the parked gate, since a gate parked on a human sends no later event.
+func TestModel_Yolo_ActsWhenTheReconcileInFlightAtTheKeypressLands(t *testing.T) {
+	sock, client, snapshot := captureRespond(t)
+	run := testRun()
+	run.StateRev = 1
+	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	run.Steps[0].FindingsJSON = &fj
+	m := NewModel(sock, client, run)
+	m.reconcilePending = true
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	if !m.yoloMode {
+		t.Fatal("precondition: y did not turn yolo on")
+	}
+	if cmd != nil {
+		_ = cmd()
+	}
+	if calls := snapshot(); len(calls) != 0 {
+		t.Fatalf("yolo responded while the reconcile was pending: %+v", calls)
+	}
+
+	reconciled := testRun()
+	reconciled.StateRev = 2
+	reconciled.Steps[0].Status = types.StepStatusAwaitingApproval
+	reconciled.Steps[0].FindingsJSON = &fj
+	_, cmd = m.Update(runReconciledMsg{run: reconciled, subscriptionID: m.subscriptionID})
+	runAll(cmd)
+
+	calls := snapshot()
+	if len(calls) != 1 || calls[0].Action != types.ActionFix {
+		t.Fatalf("yolo did not fix the parked gate once the reconcile landed: %+v", calls)
+	}
+}
+
+// Yolo checks the gate on every event, and an event can arrive between its
+// response and the step's status change (a log line of the fix it asked for).
+// That check must send nothing: it used to approve the gate yolo had just
+// asked to fix, which the daemon refuses, and the approval it recorded kept
+// yolo from answering the fix review the rereview parks. A gate parked again
+// after the fix is answered, once.
+func TestModel_Yolo_AnswersAGateOnceUntilItsStatusChanges(t *testing.T) {
+	sock, client, snapshot := captureRespond(t)
+	run := testRun()
+	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	run.Steps[0].FindingsJSON = &fj
+	m := NewModel(sock, client, run)
+	review := types.StepReview
+	send := func(msg tea.Msg) {
+		t.Helper()
+		updated, cmd := m.Update(msg)
+		m = updated.(Model)
+		runAll(cmd)
+	}
+	event := func(e ipc.Event) {
+		t.Helper()
+		e.RunID = run.ID
+		e.StepName = &review
+		send(eventMsg{event: e, subscriptionID: m.subscriptionID})
+	}
+	actions := func() []types.ApprovalAction {
+		var got []types.ApprovalAction
+		for _, call := range snapshot() {
+			got = append(got, call.Action)
+		}
+		return got
+	}
+
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix}) {
+		t.Fatalf("yolo's first response = %v, want [fix]", got)
+	}
+
+	line := "asking agent to fix identified issues...\n"
+	event(ipc.Event{Type: ipc.EventLogChunk, Content: &line})
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix}) {
+		t.Fatalf("an event before the fix started answered the gate again: %v, want [fix]", got)
+	}
+
+	event(ipc.Event{Type: ipc.EventStepStarted})
+	fixReview := string(types.StepStatusFixReview)
+	event(ipc.Event{Type: ipc.EventStepCompleted, Status: &fixReview, Findings: &fj})
+	// The fix review's diff lands, and yolo may act on the gate.
+	send(stepDiffMsg{step: review, requestID: m.stepDiffRequestID[review], subscriptionID: m.subscriptionID})
+	send(stepDiffReadyMsg{step: review, requestID: m.stepDiffRequestID[review], subscriptionID: m.subscriptionID})
+	event(ipc.Event{Type: ipc.EventLogChunk, Content: &line})
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix, types.ActionApprove}) {
+		t.Fatalf("yolo's responses through the fix review = %v, want [fix approve]", got)
+	}
+}
+
+// A response of yolo's own that fails (the socket dropped, the daemon
+// restarted) leaves the gate as it was, so yolo must forget that answer and
+// send the same action again on a retry: turning yolo off and on here. It used
+// to keep the gate marked answered and send nothing more.
+func TestModel_Yolo_RetriesTheSameActionAfterItsResponseFails(t *testing.T) {
+	sock := testSocketPath(t)
+	srv := startTestIPCServer(t, sock)
+	var mu sync.Mutex
+	var calls []ipc.RespondParams
+	srv.Handle(ipc.MethodRespond, func(_ context.Context, raw json.RawMessage) (interface{}, error) {
+		var params ipc.RespondParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, params)
+		if len(calls) == 1 {
+			return nil, errors.New("daemon restarting")
+		}
+		return &ipc.RespondResult{}, nil
+	})
+	client, err := ipc.Dial(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	actions := func() []types.ApprovalAction {
+		mu.Lock()
+		defer mu.Unlock()
+		var got []types.ApprovalAction
+		for _, call := range calls {
+			got = append(got, call.Action)
+		}
+		return got
+	}
+
+	run := testRun()
+	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	run.Steps[0].FindingsJSON = &fj
+	m := NewModel(sock, client, run)
+	press := func() tea.Cmd {
+		t.Helper()
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+		m = updated.(Model)
+		return cmd
+	}
+
+	cmd := press()
+	if cmd == nil {
+		t.Fatal("yolo sent no response to the parked gate")
+	}
+	// The failed response's message goes back through the update loop, as
+	// bubbletea delivers it.
+	updated, _ := m.Update(cmd())
+	m = updated.(Model)
+	if m.err == nil {
+		t.Fatal("the failed response was not shown")
+	}
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix}) {
+		t.Fatalf("yolo's first response = %v, want [fix]", got)
+	}
+
+	press()
+	runAll(press())
+	if got := actions(); !slices.Equal(got, []types.ApprovalAction{types.ActionFix, types.ActionFix}) {
+		t.Fatalf("yolo's responses after a failed fix and a retry = %v, want [fix fix]", got)
+	}
+}
+
+// A gate that parks again at the same status, seen only through a snapshot
+// (its step_started coalesced away), is a new gate: yolo answers it. Only the
+// snapshot's gate change can clear yolo's answer here, since the step's status
+// never changes on the model.
+func TestModel_Yolo_AnswersAGateParkedAgainSeenOnlyThroughASnapshot(t *testing.T) {
+	sock, client, snapshot := captureRespond(t)
+	run := testRun()
+	run.StateRev = 1
+	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	run.Steps[0].FindingsJSON = &fj
+	m := NewModel(sock, client, run)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+	runAll(cmd)
+
+	reparked := testRun()
+	reparked.StateRev = 2
+	reparked.Steps[0].Status = types.StepStatusAwaitingApproval
+	reparked.Steps[0].FixRoundCount = 1
+	reparked.Steps[0].FindingsJSON = &fj
+	_, cmd = m.Update(runReconciledMsg{run: reparked, subscriptionID: m.subscriptionID})
+	runAll(cmd)
+
+	var got []types.ApprovalAction
+	for _, call := range snapshot() {
+		got = append(got, call.Action)
+	}
+	if !slices.Equal(got, []types.ApprovalAction{types.ActionFix, types.ActionApprove}) {
+		t.Fatalf("yolo's responses to a gate parked again = %v, want [fix approve]", got)
+	}
+}
+
+// runAll runs a command, and each command of a batch it returns.
+func runAll(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runAll(c)
+		}
 	}
 }
 

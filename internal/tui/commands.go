@@ -104,6 +104,9 @@ func (m Model) maybeAutoApproveCmd() tea.Cmd {
 	if step == nil || m.yoloApproved[step.StepName] {
 		return nil
 	}
+	if answered, ok := m.yoloAnswered[step.StepName]; ok && answered == step.Status {
+		return nil
+	}
 	if pipeline.HasProtectedPathRefusal(m.stepFindings[step.StepName]) || pipeline.HasUnvalidatedWorkRefusal(m.stepFindings[step.StepName]) {
 		return nil
 	}
@@ -132,10 +135,45 @@ func (m Model) maybeAutoApproveCmd() tea.Cmd {
 	if step.Status != types.StepStatusFixReview && !m.yoloFixed[step.StepName] && m.stepHasActionableFindings(step.StepName) {
 		m.yoloFixed[step.StepName] = true
 		m.resetFindingSelection(step.StepName)
-		return m.respondCmd(types.ActionFix)
+		return m.yoloAnswer(step, types.ActionFix)
 	}
 	m.yoloApproved[step.StepName] = true
-	return m.respondCmd(types.ActionApprove)
+	return m.yoloAnswer(step, types.ActionApprove)
+}
+
+// yoloAnswer sends yolo's response to the gate step and, when one is sent,
+// marks the gate answered at its current status. A response that fails comes
+// back as a yoloResponseFailedMsg, so the update loop can forget the answer.
+func (m Model) yoloAnswer(step *ipc.StepResultInfo, action types.ApprovalAction) tea.Cmd {
+	cmd := m.respondCmd(action)
+	if cmd == nil {
+		return nil
+	}
+	m.yoloAnswered[step.StepName] = step.Status
+	name, status := step.StepName, step.Status
+	return func() tea.Msg {
+		msg := cmd()
+		if failed, ok := msg.(errMsg); ok {
+			return yoloResponseFailedMsg{err: failed.err, step: name, status: status, action: action}
+		}
+		return msg
+	}
+}
+
+// forgetYoloAnswer undoes what yoloAnswer recorded for a response that
+// failed, so a retry sends the same action. A mark the TUI has since cleared
+// or replaced belongs to a later gate and stays.
+func (m *Model) forgetYoloAnswer(msg yoloResponseFailedMsg) {
+	if answered, ok := m.yoloAnswered[msg.step]; !ok || answered != msg.status {
+		return
+	}
+	delete(m.yoloAnswered, msg.step)
+	switch msg.action {
+	case types.ActionFix:
+		delete(m.yoloFixed, msg.step)
+	case types.ActionApprove:
+		delete(m.yoloApproved, msg.step)
+	}
 }
 
 func (m Model) respondCmd(action types.ApprovalAction) tea.Cmd {
