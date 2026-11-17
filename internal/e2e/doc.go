@@ -14,8 +14,13 @@
 // pipeline orchestration, executor branching, and CLI wiring give weak
 // signal compared to actually running the binary against a real git
 // repo. The e2e suite consolidates the "user pushes a branch and the
-// pipeline runs to completion" journey into a single high-coverage test
-// that is meant to grow rather than fan out into many small e2e files.
+// pipeline runs to completion" journey into one high-coverage test per
+// agent (TestUserJourney<Agent>) that is meant to grow rather than fan out
+// into many small e2e files.
+//
+// The tests run one at a time within a process (each harness sets
+// process-wide env with t.Setenv), so CI splits the package by top-level
+// test across runners with scripts/e2e.sh --shard.
 //
 // Temporary daemon ownership: each NewHarness acquires a slot in
 // internal/e2edaemon (inventory + concurrency cap). scripts/e2e.sh and

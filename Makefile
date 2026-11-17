@@ -60,7 +60,8 @@ test:
 # e2e-covered agent backend, plus the step-local e2e tests that live
 # next to the pipeline-step code (e.g. coverage provider journeys).
 # Excluded from `make test` because it is behind the `e2e` build tag and
-# rebuilds binaries on each run.
+# rebuilds binaries on each run. This runs the whole suite in one `go test` run;
+# CI runs it as `scripts/e2e.sh --shard <i>/3` on three runners.
 #
 # scripts/e2e.sh owns temporary-daemon inventory + EXIT/INT/TERM reaping so
 # an interrupted or timed-out go test child cannot leave detached e2e
