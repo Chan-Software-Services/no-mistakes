@@ -18,27 +18,10 @@ func TestNoAutoMaintenanceKeepsACommitFromStartingMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(emptyConfig, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	emptyConfig := emptyGitConfig(t)
 	git := func(trace string, args ...string) {
 		t.Helper()
-		cmd := exec.Command(gitBin, args...)
-		cmd.Dir = dir
-		// A contributor's own maintenance.auto=false must not make the
-		// plain commit look safe.
-		cmd.Env = append(os.Environ(),
-			"GIT_CONFIG_GLOBAL="+emptyConfig,
-			"GIT_CONFIG_NOSYSTEM=1",
-			"GIT_CONFIG_COUNT=0",
-			"GIT_TRACE2="+trace,
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
+		runGitIn(t, gitBin, dir, parallelGitEnv(emptyConfig, trace), args...)
 	}
 	traceDir := t.TempDir()
 	git(filepath.Join(traceDir, "init"), "init")
@@ -53,6 +36,81 @@ func TestNoAutoMaintenanceKeepsACommitFromStartingMaintenance(t *testing.T) {
 	git(quiet, append(NoAutoMaintenance(), "commit", "--allow-empty", "-m", "quiet")...)
 	if starts := autoMaintenanceStarts(t, quiet); len(starts) != 0 {
 		t.Fatalf("a commit with NoAutoMaintenance started auto-maintenance: %q", starts)
+	}
+}
+
+// A go test started from a hook under `git -c maintenance.auto=false commit`
+// inherits that option through GIT_CONFIG_PARAMETERS. The parallel test above
+// cannot set it, so this one does, and runs the same plain commit in the
+// environment that test gives git: the commit must still start
+// auto-maintenance, or the parallel test fails under such a parent git.
+func TestParallelGitEnvShutsOutAParentGitsOptions(t *testing.T) {
+	gitBin, err := RealGit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'maintenance.auto'='false'")
+	dir := t.TempDir()
+	emptyConfig := emptyGitConfig(t)
+	traceDir := t.TempDir()
+	runGitIn(t, gitBin, dir, parallelGitEnv(emptyConfig, filepath.Join(traceDir, "init")), "init")
+
+	plain := filepath.Join(traceDir, "plain")
+	runGitIn(t, gitBin, dir, parallelGitEnv(emptyConfig, plain), "commit", "--allow-empty", "-m", "plain")
+	if starts := autoMaintenanceStarts(t, plain); len(starts) == 0 {
+		t.Fatalf("a plain commit started no auto-maintenance; trace:\n%s", readFile(t, plain))
+	}
+}
+
+// parallelGitEnv returns the environment a parallel test, which cannot call
+// IgnoreUserGitConfig since that uses t.Setenv, gives a git it starts, so a
+// maintenance.auto=false from outside the test's repository cannot make a
+// plain commit look safe:
+//   - GIT_CONFIG_GLOBAL points at emptyConfig, an empty file, so neither
+//     ~/.gitconfig nor $XDG_CONFIG_HOME/git/config is read;
+//   - GIT_CONFIG_NOSYSTEM keeps the system config out;
+//   - GIT_CONFIG_PARAMETERS is left out of what the test process has: a git
+//     run as `git -c <key>=<value> <cmd>` hands its options to every child
+//     through it, so a go test started from a hook under such a commit or
+//     push would otherwise pass them on;
+//   - GIT_CONFIG_COUNT is 0, so no GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n
+//     pairs an agent harness set apply.
+//
+// It also writes the git's trace to trace and gives it an identity to commit
+// with.
+func parallelGitEnv(emptyConfig, trace string) []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_CONFIG_PARAMETERS=") {
+			env = append(env, kv)
+		}
+	}
+	return append(env,
+		"GIT_CONFIG_GLOBAL="+emptyConfig,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_COUNT=0",
+		"GIT_TRACE2="+trace,
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+}
+
+func emptyGitConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func runGitIn(t *testing.T, gitBin, dir string, env []string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(gitBin, args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 }
 
