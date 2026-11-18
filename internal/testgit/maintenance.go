@@ -77,10 +77,21 @@ func TurnOffRepoAutoMaintenance(t testing.TB, gitDir string) {
 	}
 }
 
-// IgnoreUserGitConfig points GIT_CONFIG_GLOBAL at an empty file and sets
-// GIT_CONFIG_NOSYSTEM for the rest of the test, so a contributor's own global
-// or system config (a maintenance.auto=false above all) cannot make
-// RequireNoAutoMaintenance pass with the test's own switch gone.
+// IgnoreUserGitConfig shuts out, for the rest of the test, every git config
+// a git the test starts would read from outside its own repository, so none
+// (a maintenance.auto=false above all) can make RequireNoAutoMaintenance pass
+// with the test's own switch gone:
+//   - GIT_CONFIG_GLOBAL points at an empty file, so neither ~/.gitconfig nor
+//     $XDG_CONFIG_HOME/git/config is read;
+//   - GIT_CONFIG_NOSYSTEM keeps the system config out;
+//   - GIT_CONFIG_PARAMETERS is unset: a git run as `git -c <key>=<value> <cmd>`
+//     hands its options to every child through it, so a go test started from
+//     a hook under such a commit or push would otherwise pass them on;
+//   - GIT_CONFIG_COUNT is 0, so no GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n
+//     pairs an agent harness set apply.
+//
+// It leaves GIT_CONFIG, which only `git config` reads. A test that wants its
+// own configuration pairs sets them after calling it.
 func IgnoreUserGitConfig(t testing.TB) {
 	t.Helper()
 	empty := filepath.Join(t.TempDir(), "gitconfig")
@@ -89,6 +100,13 @@ func IgnoreUserGitConfig(t testing.TB) {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", empty)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	// t.Setenv records the value to restore after the test; the variable is
+	// then unset rather than left empty, as git would see it with no parent.
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
+	if err := os.Unsetenv("GIT_CONFIG_PARAMETERS"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "0")
 }
 
 // TraceGit points GIT_TRACE2 at a new file for the rest of the test and
