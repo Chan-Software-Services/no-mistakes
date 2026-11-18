@@ -88,10 +88,12 @@ func TurnOffRepoAutoMaintenance(t testing.TB, gitDir string) {
 //     hands its options to every child through it, so a go test started from
 //     a hook under such a commit or push would otherwise pass them on;
 //   - GIT_CONFIG_COUNT is 0, so no GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n
-//     pairs an agent harness set apply.
+//     pairs an agent harness set apply;
+//   - GIT_CONFIG is unset: only `git config` reads it, as if given --file,
+//     so it cannot start or stop auto-maintenance, but with it set a test's
+//     own `git config` reads that file alone and misses every other scope.
 //
-// It leaves GIT_CONFIG, which only `git config` reads. A test that wants its
-// own configuration pairs sets them after calling it.
+// A test that wants its own configuration pairs sets them after calling it.
 func IgnoreUserGitConfig(t testing.TB) {
 	t.Helper()
 	empty := filepath.Join(t.TempDir(), "gitconfig")
@@ -100,11 +102,13 @@ func IgnoreUserGitConfig(t testing.TB) {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", empty)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	// t.Setenv records the value to restore after the test; the variable is
+	// t.Setenv records each value to restore after the test; the variable is
 	// then unset rather than left empty, as git would see it with no parent.
-	t.Setenv("GIT_CONFIG_PARAMETERS", "")
-	if err := os.Unsetenv("GIT_CONFIG_PARAMETERS"); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"GIT_CONFIG_PARAMETERS", "GIT_CONFIG"} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("GIT_CONFIG_COUNT", "0")
 }
