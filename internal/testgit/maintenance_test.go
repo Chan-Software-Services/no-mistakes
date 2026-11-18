@@ -165,9 +165,53 @@ func TestTurnOffRepoAutoMaintenanceKeepsALocalPushFromStartingMaintenance(t *tes
 	RequireNoAutoMaintenance(t, quiet)
 }
 
-// isolatedGit returns the real git with the contributor's own global and
-// system config out of the way, so their maintenance.auto=false cannot make
-// a check pass.
+// A go test started from a hook under `git -c maintenance.auto=false commit`
+// inherits that option through GIT_CONFIG_PARAMETERS, and an agent harness can
+// hand the same keys through GIT_CONFIG_COUNT pairs. IgnoreUserGitConfig must
+// shut out both, or a check that calls it passes with the test's own switch
+// removed.
+func TestIgnoreUserGitConfigShutsOutConfigFromTheEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  [][2]string
+	}{
+		{"a parent git's options", [][2]string{
+			{"GIT_CONFIG_PARAMETERS", "'maintenance.auto'='false' 'gc.auto'='0'"},
+		}},
+		{"configuration pairs", [][2]string{
+			{"GIT_CONFIG_COUNT", "2"},
+			{"GIT_CONFIG_KEY_0", "maintenance.auto"}, {"GIT_CONFIG_VALUE_0", "false"},
+			{"GIT_CONFIG_KEY_1", "gc.auto"}, {"GIT_CONFIG_VALUE_1", "0"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gitBin, err := RealGit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, kv := range tc.env {
+				t.Setenv(kv[0], kv[1])
+			}
+			IgnoreUserGitConfig(t)
+			setGitIdentity(t)
+			dir := t.TempDir()
+			run(t, gitBin, dir, "init")
+			if out, err := exec.Command(gitBin, "-C", dir, "config", "--get", "maintenance.auto").Output(); err == nil {
+				t.Errorf("maintenance.auto = %q from %s, want it shut out", strings.TrimSpace(string(out)), tc.name)
+			}
+
+			trace := TraceGit(t)
+			run(t, gitBin, dir, "commit", "--allow-empty", "-m", "plain")
+			if starts := autoMaintenanceStarts(t, trace); len(starts) == 0 {
+				t.Fatalf("a plain commit started no auto-maintenance with %s set; trace:\n%s", tc.name, readFile(t, trace))
+			}
+		})
+	}
+}
+
+// isolatedGit returns the real git with the contributor's own config and
+// any config in the environment out of the way, so a maintenance.auto=false
+// from either cannot make a check pass.
 func isolatedGit(t *testing.T) string {
 	t.Helper()
 	gitBin, err := RealGit()
@@ -175,14 +219,18 @@ func isolatedGit(t *testing.T) string {
 		t.Fatal(err)
 	}
 	IgnoreUserGitConfig(t)
-	t.Setenv("GIT_CONFIG_COUNT", "0")
+	setGitIdentity(t)
+	return gitBin
+}
+
+func setGitIdentity(t *testing.T) {
+	t.Helper()
 	for _, kv := range [][2]string{
 		{"GIT_AUTHOR_NAME", "test"}, {"GIT_AUTHOR_EMAIL", "test@test.com"},
 		{"GIT_COMMITTER_NAME", "test"}, {"GIT_COMMITTER_EMAIL", "test@test.com"},
 	} {
 		t.Setenv(kv[0], kv[1])
 	}
-	return gitBin
 }
 
 func run(t *testing.T, gitBin, dir string, args ...string) string {
