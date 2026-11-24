@@ -866,7 +866,7 @@ An entry that is empty after trimming whitespace, or that is not a valid glob, f
 That check runs on whichever copy of the file is parsed, including the pushed branch's, so a broken rule surfaces before it merges and becomes the trusted copy.
 
 Like `test.instructions`, this field decides how the gate validates the pushed branch, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`: a contributor's pushed branch cannot add or widen it to exempt its own code from live validation.
-It describes one repository's tree, so a value in the global config is ignored.
+It describes one repository's tree, so a valid value in the global config is ignored; an empty or malformed entry there still fails the global config's parse.
 
 ### test.allow_approve_over_failure
 
