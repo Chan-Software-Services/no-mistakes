@@ -8,12 +8,12 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` and `gates[].command` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor` and `devin`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.conversation`, `review.path_instructions`, `gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `ci.rerun_transient`, `ci.revalidate_repairs`, `rebase.strategy`, `test.prepare`, `test.instructions`, `test.allow_approve_over_failure`, `test.evidence.branch`, `pr.template`, and `pr.publish_intent` only from that trusted copy.
+The daemon also reads `document.instructions`, `review.conversation`, `review.path_instructions`, `gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `ci.rerun_transient`, `ci.revalidate_repairs`, `rebase.strategy`, `test.prepare`, `test.instructions`, `test.allow_approve_over_failure`, `test.no_surface_paths`, `test.evidence.branch`, `pr.template`, and `pr.publish_intent` only from that trusted copy.
 `pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
-Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`, `pr.title_format`, and `providers`) are still read from the pushed branch, except `test.prepare`, `test.instructions`, `test.allow_approve_over_failure`, and `test.evidence.branch`.
+Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`, `pr.title_format`, and `providers`) are still read from the pushed branch, except `test.prepare`, `test.instructions`, `test.allow_approve_over_failure`, `test.no_surface_paths`, and `test.evidence.branch`.
 
 If you genuinely want per-branch `commands` and `agent` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](#allow_repo_commands) in this same file on your default branch. This re-enables the previous behavior with eyes open. The switch is read only from the trusted default-branch copy, so a contributor cannot self-enable it from a pushed branch.
 :::
@@ -102,6 +102,11 @@ test:
   # Product startup and live-validation runbook, read only from the trusted default branch.
   instructions: |
     Start the app with `make dev`, then drive the checkout flow in a browser.
+  # Paths that never run in the product, read only from the trusted default branch.
+  # A no-surface verdict on a change touching only these passes without parking.
+  no_surface_paths:
+    - "docs/**"
+    - "*.md"
   evidence:
     store_in_repo: true
     dir: .no-mistakes/evidence
@@ -540,7 +545,7 @@ Paths to exclude from review and documentation checks.
 | Type | `string[]` |
 | Default | Empty (no ignores) |
 
-Pattern matching rules. [`review.path_instructions`](#reviewpath_instructions) uses the same matcher, so there is one path syntax to learn:
+Pattern matching rules. [`review.path_instructions`](#reviewpath_instructions), [`protected_paths`](#protected_paths), and [`test.no_surface_paths`](#testno_surface_paths) use the same matcher, so there is one path syntax to learn:
 
 | Pattern | Rule |
 | --- | --- |
@@ -825,6 +830,43 @@ Repository-specific runbook for standing the product up during live validation.
 
 The Test step injects these instructions into its evidence prompt so the agent can start and drive the real product the way an end user would.
 Like `document.instructions`, this field steers its own gate, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`. A contributor's pushed branch cannot rewrite the runbook that validates that branch.
+
+### test.no_surface_paths
+
+Paths that never run in your product, so a change touching only them has nothing to validate live.
+
+| | |
+| --- | --- |
+| Type | `string[]` |
+| Default | Empty (every `no-surface` verdict parks for an operator) |
+| Trust | Trusted default branch only, regardless of `allow_repo_commands`; repository only |
+
+```yaml
+test:
+  no_surface_paths:
+    - "docs/content/**"
+    - ".github/workflows/**"
+    - "*.md"
+```
+
+The Test step's evidence agent still runs on every change.
+When it returns the `no-surface` verdict (it found nothing to drive in the running product), the step normally parks with an `ask-user` warning so an operator confirms that claim.
+With this field set, the step decides that itself only when both signals agree: the agent returned `no-surface`, and every file the run could publish matches at least one pattern here.
+Then it records an `info` finding with ID `test-no-surface-skip`, naming the matching files and the agent's reasons, completes as `passed`, and the PR body's live-validation line says the live check was skipped.
+The verdict stays `no-surface` everywhere it is recorded, the PR attestation included.
+
+The changed files are every file the run could publish: each path changed since the branch base, committed or not, both paths of a rename and the path of a deletion, and every untracked file that is not ignored.
+The complete set is used, deliberately **not** filtered by [`ignore_patterns`](#ignore_patterns), since that field is read from the pushed branch.
+If any changed file matches no pattern, if the changed files cannot be read, or if there are none, the step parks exactly as it would without this field, and the park says why: it names the files no pattern covers, or says the gate could not confirm the changed files.
+A `go`, `no-go`, or `inconclusive` verdict is never affected, and neither is any other finding that parks the step, such as a failing [`commands.test`](#commandstest).
+
+Patterns use the same matcher and syntax as [`ignore_patterns`](#ignore_patterns).
+List only paths that ship nothing: an installer script kept under a documentation directory still runs on users' machines.
+An entry that is empty after trimming whitespace, or that is not a valid glob, fails when the config is parsed, naming the entry's index and value.
+That check runs on whichever copy of the file is parsed, including the pushed branch's, so a broken rule surfaces before it merges and becomes the trusted copy.
+
+Like `test.instructions`, this field decides how the gate validates the pushed branch, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`: a contributor's pushed branch cannot add or widen it to exempt its own code from live validation.
+It describes one repository's tree, so a value in the global config is ignored.
 
 ### test.allow_approve_over_failure
 

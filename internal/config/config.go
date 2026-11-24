@@ -861,6 +861,15 @@ type TestRaw struct {
 	// (see EffectiveRepoConfig): a contributor's pushed branch must not be able
 	// to waive the configured-test gate that validates it.
 	AllowApproveOverFailure string `yaml:"allow_approve_over_failure"`
+	// NoSurfacePaths lists the paths that never run in this repository's
+	// product. When the evidence agent returns the no-surface verdict and
+	// every changed file matches one of these globs (the ignore_patterns
+	// matcher), the Test step records that live validation was skipped
+	// instead of parking for an operator. It is honored ONLY from the
+	// trusted default-branch copy of .no-mistakes.yaml (see
+	// EffectiveRepoConfig): a contributor's pushed branch must not be able
+	// to exempt its own code from live validation.
+	NoSurfacePaths []string `yaml:"no_surface_paths"`
 }
 
 // EvidenceRaw is the YAML representation of test-evidence settings.
@@ -896,14 +905,17 @@ type EvidenceRaw struct {
 	MaxRuns   *int    `yaml:"max_runs"`
 }
 
-// Test is the resolved test-step config. Prepare, Instructions and
-// AllowApproveOverFailure come from the trusted default-branch repo config
-// only (see TestRaw).
+// Test is the resolved test-step config. Prepare, Instructions,
+// AllowApproveOverFailure and NoSurfacePaths come from the trusted
+// default-branch repo config only (see TestRaw).
 type Test struct {
 	Prepare                 bool
 	Evidence                Evidence
 	Instructions            string
 	AllowApproveOverFailure string
+	// NoSurfacePaths holds the trimmed test.no_surface_paths globs; empty
+	// means the gate never settles a no-surface verdict itself.
+	NoSurfacePaths []string
 }
 
 // Evidence is the resolved test-evidence config. When StoreInRepo is true, the
@@ -2670,9 +2682,11 @@ func validatePathInstructionGlob(pattern string) error {
 // maintainer's CI minutes.
 // The exceptions inside test are prepare, which eagerly runs setup before an
 // agent-only Test, evidence.branch, which names a git ref the daemon pushes to,
-// instructions, which steers the gate that validates the pushed branch, and
+// instructions, which steers the gate that validates the pushed branch,
 // allow_approve_over_failure, which waives the required check for an
-// approved-over-failure commands.test. All four are trusted-only.
+// approved-over-failure commands.test, and no_surface_paths, which lets the
+// Test step pass a no-surface verdict without an operator. All five are
+// trusted-only.
 func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
 	if pushed == nil {
 		pushed = &RepoConfig{}
@@ -2746,6 +2760,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// trusted-only for the same reason no_ci is: a pushed branch must not
 		// waive the gate that certifies it.
 		effective.Test.AllowApproveOverFailure = trusted.Test.AllowApproveOverFailure
+		// test.no_surface_paths lets the Test step settle a no-surface verdict
+		// itself instead of parking for an operator. It is trusted-only for
+		// the same reason test.instructions is, and regardless of
+		// allow_repo_commands: a pushed branch must not be able to exempt its
+		// own code from live validation by listing it as having no surface.
+		effective.Test.NoSurfacePaths = append([]string(nil), trusted.Test.NoSurfacePaths...)
 		// pr.base_branch controls where the contributor's PR lands, so it is
 		// trusted-only unless the repository explicitly opts into pushed
 		// settings alongside commands and agent selection. TitleFormat is a
@@ -2770,6 +2790,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.Test.Instructions = ""
 		effective.Test.Prepare = false
 		effective.Test.AllowApproveOverFailure = ""
+		effective.Test.NoSurfacePaths = nil
 		if !allowRepoCommands {
 			effective.PR.BaseBranch = ""
 		}
@@ -2991,7 +3012,33 @@ func validateTestRaw(test TestRaw) error {
 	if test.Evidence.MaxRuns != nil && *test.Evidence.MaxRuns < 0 {
 		return fmt.Errorf("test.evidence.max_runs must be 0 (keep every run) or greater, got %d", *test.Evidence.MaxRuns)
 	}
+	// no_surface_paths is honored only from the trusted copy, and a blank or
+	// malformed rule there would silently match nothing. Refusing it on every
+	// copy surfaces the typo before the branch carrying it merges.
+	for i, pattern := range test.NoSurfacePaths {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			return fmt.Errorf("test.no_surface_paths[%d] must not be empty", i)
+		}
+		if err := validatePathInstructionGlob(pattern); err != nil {
+			return fmt.Errorf("test.no_surface_paths[%d] %q is not a valid glob: %w", i, pattern, err)
+		}
+	}
 	return nil
+}
+
+// resolveNoSurfacePaths trims every test.no_surface_paths entry. Validation
+// already refused blank and malformed entries, so nothing is dropped here;
+// an unset list resolves to nil.
+func resolveNoSurfacePaths(patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	resolved := make([]string, len(patterns))
+	for i, pattern := range patterns {
+		resolved[i] = strings.TrimSpace(pattern)
+	}
+	return resolved
 }
 
 // applyProvidersOverrides applies non-nil raw values onto resolved defaults.
@@ -3185,6 +3232,7 @@ func merge(global *GlobalConfig, repo *RepoConfig, override *RepositoryOverride)
 	test.Prepare = repo.Test.Prepare
 	test.Instructions = strings.TrimSpace(repo.Test.Instructions)
 	test.AllowApproveOverFailure = strings.TrimSpace(repo.Test.AllowApproveOverFailure)
+	test.NoSurfacePaths = resolveNoSurfacePaths(repo.Test.NoSurfacePaths)
 
 	commit := Commit{FixMessage: DefaultFixMessageTemplate}
 	if global.Commit.FixMessage != nil {
