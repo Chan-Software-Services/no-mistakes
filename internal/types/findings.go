@@ -123,6 +123,13 @@ const FindingCategoryTestCommand = "test-command"
 // finding as a Test exception rather than a silent green pass.
 const FindingIDTestAgentTimeout = "test-agent-timeout"
 
+// FindingIDTestNoSurfaceSkip is the informational finding the Test step
+// records in place of the no-surface park when the evidence agent returned
+// "no-surface" and every changed file matches the trusted
+// test.no_surface_paths. It is severity info and action no-op, so it never
+// parks; the PR body reads it to say the live check was skipped.
+const FindingIDTestNoSurfaceSkip = "test-no-surface-skip"
+
 // FindingIDTestAgentStall is the Test-step park when an evidence, correction,
 // or repair invocation showed no activity for test_agent_stall_timeout and was
 // not retried (it had been active, or its one automatic retry stalled too). It
