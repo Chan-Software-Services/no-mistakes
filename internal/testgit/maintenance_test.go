@@ -118,8 +118,8 @@ func logSubjects(t *testing.T, gitBin, gitDir string) string {
 //
 // It builds on Environ, so a GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE such a
 // parent git hands its hook cannot point the git at the contributor's
-// checkout instead of the test's directory. It also writes the git's trace to trace and gives it an identity to commit
-// with.
+// checkout instead of the test's directory. It also writes the git's trace to
+// trace and gives it an identity to commit with.
 func parallelGitEnv(emptyConfig, trace string) []string {
 	var env []string
 	for _, kv := range Environ() {

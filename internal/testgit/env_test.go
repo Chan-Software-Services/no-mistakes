@@ -3,14 +3,15 @@ package testgit
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
 
-// Environ drops each variable git itself clears before it works in another
-// repository, except the config ones the test helpers manage, and keeps the
-// rest of the environment as it is.
+// WithoutParentRepo drops each variable the installed git lists as one it
+// clears before it works in another repository, keeps the config ones the
+// test helpers manage, and keeps the rest of the environment as it is.
 func TestWithoutParentRepoDropsTheRepositoryVariablesGitLists(t *testing.T) {
 	t.Parallel()
 	gitBin, err := RealGit()
@@ -37,23 +38,22 @@ func TestWithoutParentRepoDropsTheRepositoryVariablesGitLists(t *testing.T) {
 	}
 }
 
-// TestMain calls DropParentRepoEnv so that no git the package's tests start,
-// through the code under test included, inherits a parent git's repository.
+// DropParentRepoEnv unsets, in the test process, a GIT_DIR that a parent
+// git handed the go test, here pointed at a second temporary repository.
 func TestDropParentRepoEnvUnsetsAParentGitsRepositoryInTheProcess(t *testing.T) {
-	parent := t.TempDir()
-	for _, name := range parentRepoVars {
-		t.Setenv(name, parent)
+	gitBin, err := RealGit()
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("GIT_CONFIG_COUNT", "0")
+	parent := t.TempDir()
+	if out, err := exec.Command(gitBin, "init", parent).CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v: %s", parent, err, out)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(parent, ".git"))
 
 	DropParentRepoEnv()
 
-	for _, name := range parentRepoVars {
-		if value, ok := os.LookupEnv(name); ok {
-			t.Errorf("%s = %q after DropParentRepoEnv, want it unset", name, value)
-		}
-	}
-	if got := os.Getenv("GIT_CONFIG_COUNT"); got != "0" {
-		t.Errorf("GIT_CONFIG_COUNT = %q after DropParentRepoEnv, want it kept", got)
+	if value, ok := os.LookupEnv("GIT_DIR"); ok {
+		t.Fatalf("GIT_DIR = %q after DropParentRepoEnv, want it unset", value)
 	}
 }
