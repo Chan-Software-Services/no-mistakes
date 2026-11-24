@@ -123,6 +123,13 @@ const FindingCategoryTestCommand = "test-command"
 // finding as a Test exception rather than a silent green pass.
 const FindingIDTestAgentTimeout = "test-agent-timeout"
 
+// FindingIDTestNoSurfaceSkip is the informational finding the Test step
+// records in place of the no-surface park when the evidence agent returned
+// "no-surface" and every changed file matches the trusted
+// test.no_surface_paths. It is severity info and action no-op, so it never
+// parks; the PR body reads it to say the live check was skipped.
+const FindingIDTestNoSurfaceSkip = "test-no-surface-skip"
+
 // FindingIDTestAgentStall is the Test-step park when an evidence, correction,
 // or repair invocation showed no activity for test_agent_stall_timeout and was
 // not retried (it had been active, or its one automatic retry stalled too). It
@@ -159,9 +166,11 @@ const (
 // docs-only change, a pure non-runtime refactor, or anything else with no
 // live-exercisable scenario. It is not a silent skip: the Test step parks
 // for a human to decide whether proceeding without live validation is
-// acceptable. A change that has a live surface and was not driven still
-// uses pass/fail/untested plus go/no-go/inconclusive; claiming no-surface
-// while any scenario is live or pass/fail is a contract violation.
+// acceptable, unless the trusted test.no_surface_paths cover every changed
+// file, when it records FindingIDTestNoSurfaceSkip instead. A change that
+// has a live surface and was not driven still uses pass/fail/untested plus
+// go/no-go/inconclusive; claiming no-surface while any scenario is live or
+// pass/fail is a contract violation.
 const (
 	TestVerdictGo           = "go"
 	TestVerdictNoGo         = "no-go"

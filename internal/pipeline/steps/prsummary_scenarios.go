@@ -58,13 +58,54 @@ func collectTestingVerdict(sr *db.StepResult, rounds []*db.StepRound) string {
 	return ""
 }
 
+// collectTestingNoSurfaceSkip reports whether the gate recorded
+// test-no-surface-skip in place of the no-surface park, reading the same
+// findings payload collectTestingVerdict reads so the line and the verdict
+// always come from one record.
+func collectTestingNoSurfaceSkip(sr *db.StepResult, rounds []*db.StepRound) bool {
+	for _, raw := range testingEvidenceFindingsJSON(sr, rounds) {
+		if raw == nil || strings.TrimSpace(*raw) == "" {
+			continue
+		}
+		findings, err := types.ParseFindingsJSON(*raw)
+		if err != nil {
+			continue
+		}
+		return hasNoSurfaceSkipFinding(&findings)
+	}
+	return false
+}
+
+// hasNoSurfaceSkipFinding reports whether findings carry the gate's
+// test-no-surface-skip record.
+func hasNoSurfaceSkipFinding(findings *types.Findings) bool {
+	for _, item := range findings.Items {
+		if item.ID == types.FindingIDTestNoSurfaceSkip {
+			return true
+		}
+	}
+	return false
+}
+
 // renderLiveValidationLine is the one-line answer to "was this live
 // validated": the verdict plus how much of the scenario list was actually
 // driven against the product. It returns "" when neither is recorded.
-func renderLiveValidationLine(scenarios []types.TestScenario, verdict string) string {
+//
+// noSurfaceSkipped is true when the gate itself settled a no-surface verdict
+// because the trusted test.no_surface_paths covered every changed file. The
+// line then says the live check was skipped and why, so a reader never takes
+// it for a passed one; a no-surface a human approved keeps the plain line.
+func renderLiveValidationLine(scenarios []types.TestScenario, verdict string, noSurfaceSkipped bool) string {
 	live, total := types.LiveScenarioCounts(scenarios)
 	if !types.IsKnownTestVerdict(verdict) && total == 0 {
 		return ""
+	}
+	if noSurfaceSkipped && verdict == types.TestVerdictNoSurface {
+		line := "Live validation: ⏭️ no-surface, skipped - every changed file matches the repository's trusted `test.no_surface_paths` and the evidence agent found nothing to drive live"
+		if total > 0 {
+			line += fmt.Sprintf("; %d of %d scenarios driven live against the product", live, total)
+		}
+		return line
 	}
 	var b strings.Builder
 	b.WriteString("Live validation: ")

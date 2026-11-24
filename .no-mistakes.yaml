@@ -17,6 +17,26 @@ commands:
 auto_fix:
   review: 0
 
+# Paths that never run in the product. The Test step goes on without parking on
+# a no-surface verdict only when every changed file matches one of these AND the
+# evidence agent itself returns no-surface; either signal alone still parks.
+# docs/** is deliberately not listed: docs/install.sh and docs/install.ps1 are
+# the shipped installers. .github/actions/** is not listed either: the
+# require-no-mistakes action is shipped. The basename entries also match the
+# review fixtures' testdata/**/README.md, which run in no product.
+# See docs/src/content/docs/reference/repo-config.md (test.no_surface_paths).
+test:
+  no_surface_paths:
+    - "docs/src/content/**"
+    - ".github/workflows/**"
+    - ".agents/**"
+    - "AGENTS.md"
+    - "CLAUDE.md"
+    - "README.md"
+    - "README.zh-CN.md"
+    - "CONTRIBUTING.md"
+    - "VISION.md"
+
 # Documentation ownership map for the document step's placement policy.
 document:
   instructions: |

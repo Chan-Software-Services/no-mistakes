@@ -309,7 +309,18 @@ Rules:
 		findings.Summary = strings.TrimSpace(strings.Join([]string{baselineSummary, findings.Summary}, "\n"))
 	}
 
-	findings.Items = append(findings.Items, verdictFindings(findings, report.rebuilt())...)
+	var noSurface noSurfaceDecision
+	if findings.Verdict == types.TestVerdictNoSurface && len(sctx.Config.Test.NoSurfacePaths) > 0 {
+		changed, readErr := noSurfaceChangedPaths(ctx, sctx.WorkDir, baseSHA)
+		if readErr != nil {
+			sctx.Log(fmt.Sprintf("could not read the changed files to match test.no_surface_paths: %v", readErr))
+		}
+		noSurface = decideNoSurface(changed, readErr, sctx.Config.Test.NoSurfacePaths)
+		if noSurface.skip {
+			sctx.Log(noSurfaceSkipLogLine(noSurface))
+		}
+	}
+	findings.Items = append(findings.Items, verdictFindings(findings, report.rebuilt(), noSurface)...)
 	if report.rebuilt() {
 		findings.Items = append(findings.Items, rebuiltTestReportNote(report.rebuiltFrom))
 	}
@@ -584,7 +595,11 @@ func trustedTestInstructionsSection(sctx *pipeline.StepContext) string {
 //     without live validation is acceptable. It is not a silent pass and
 //     not a hard fail. A change that claimed a pass/fail or drove anything
 //     live cannot reach this branch (unmarshalRequiredTestFindings rejects
-//     that masquerade).
+//     that masquerade). The one exception is noSurface.skip: every changed
+//     file matches the trusted test.no_surface_paths, so both signals agree
+//     and the gate records the info finding test-no-surface-skip instead of
+//     parking. With rules configured but not covering the change, the park
+//     names the uncovered files (see test_no_surface.go).
 //   - "go" adds nothing.
 //
 // Untested scenarios never produce a finding at any verdict. They are listed
@@ -595,7 +610,10 @@ func trustedTestInstructionsSection(sctx *pipeline.StepContext) string {
 // rebuilt says the report came from a correction turn: an inconclusive
 // verdict then says so, since it may understate what the evidence turn drove
 // live.
-func verdictFindings(findings Findings, rebuilt bool) []Finding {
+//
+// noSurface is the trusted path rule's decision; its zero value (rules unset,
+// or a verdict other than no-surface) leaves every verdict as described above.
+func verdictFindings(findings Findings, rebuilt bool, noSurface noSurfaceDecision) []Finding {
 	live, total := types.LiveScenarioCounts(findings.Scenarios)
 	coverage := fmt.Sprintf("%d of %d scenarios were driven live against the product", live, total)
 	switch findings.Verdict {
@@ -612,10 +630,13 @@ func verdictFindings(findings Findings, rebuilt bool) []Finding {
 			Description: fmt.Sprintf("live validation verdict: inconclusive (%s)%s%s", coverage, untestedScenarioSuffix(findings.Scenarios), rebuiltInconclusiveSuffix(rebuilt)),
 		}}
 	case types.TestVerdictNoSurface:
+		if noSurface.skip {
+			return []Finding{noSurfaceSkipFinding(noSurface, coverage, findings.Scenarios)}
+		}
 		return []Finding{{
 			Severity:    types.FindingSeverityWarning,
 			Action:      types.ActionAskUser,
-			Description: fmt.Sprintf("this change has no live-validatable surface; proceed without live validation? (%s)%s", coverage, untestedScenarioReasonSuffix(findings.Scenarios)),
+			Description: fmt.Sprintf("this change has no live-validatable surface; proceed without live validation? (%s)%s%s", coverage, untestedScenarioReasonSuffix(findings.Scenarios), noSurfaceParkSuffix(noSurface)),
 		}}
 	default:
 		return nil
