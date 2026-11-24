@@ -62,6 +62,46 @@ func TestParallelGitEnvShutsOutAParentGitsOptions(t *testing.T) {
 	}
 }
 
+// A go test started from a hook under a git commit or push can inherit
+// GIT_DIR from its parent git. The parallel test above cannot set it, so this
+// one does, pointed at a second repository standing in for the contributor's
+// checkout, and runs the same init and plain commit in the environment that
+// test gives git: both must act on the test's own directory.
+func TestParallelGitEnvShutsOutAParentGitsRepository(t *testing.T) {
+	gitBin, err := RealGit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyConfig := emptyGitConfig(t)
+	traceDir := t.TempDir()
+	parent := t.TempDir()
+	runGitIn(t, gitBin, parent, parallelGitEnv(emptyConfig, filepath.Join(traceDir, "parent-init")), "init")
+	t.Setenv("GIT_DIR", filepath.Join(parent, ".git"))
+
+	dir := t.TempDir()
+	runGitIn(t, gitBin, dir, parallelGitEnv(emptyConfig, filepath.Join(traceDir, "init")), "init")
+	runGitIn(t, gitBin, dir, parallelGitEnv(emptyConfig, filepath.Join(traceDir, "plain")), "commit", "--allow-empty", "-m", "plain")
+
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		t.Errorf("git init made no repository in the test's directory: %v", err)
+	}
+	if subjects := logSubjects(t, gitBin, filepath.Join(parent, ".git")); subjects != "" {
+		t.Errorf("the plain commit landed in the repository GIT_DIR names: its log is %q", subjects)
+	}
+}
+
+// logSubjects returns the subjects of every commit the repository at gitDir
+// holds, "" when it has none. It names the repository on the command line, so
+// it reads that one whatever GIT_DIR the test process has.
+func logSubjects(t *testing.T, gitBin, gitDir string) string {
+	t.Helper()
+	out, err := exec.Command(gitBin, "--git-dir="+gitDir, "log", "--all", "--format=%s").Output()
+	if err != nil {
+		t.Fatalf("git log in %s: %v", gitDir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // parallelGitEnv returns the environment a parallel test, which cannot call
 // IgnoreUserGitConfig since that uses t.Setenv, gives a git it starts, so a
 // maintenance.auto=false from outside the test's repository cannot make a
@@ -76,11 +116,13 @@ func TestParallelGitEnvShutsOutAParentGitsOptions(t *testing.T) {
 //   - GIT_CONFIG_COUNT is 0, so no GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n
 //     pairs an agent harness set apply.
 //
-// It also writes the git's trace to trace and gives it an identity to commit
+// It builds on Environ, so a GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE such a
+// parent git hands its hook cannot point the git at the contributor's
+// checkout instead of the test's directory. It also writes the git's trace to trace and gives it an identity to commit
 // with.
 func parallelGitEnv(emptyConfig, trace string) []string {
 	var env []string
-	for _, kv := range os.Environ() {
+	for _, kv := range Environ() {
 		if !strings.HasPrefix(kv, "GIT_CONFIG_PARAMETERS=") {
 			env = append(env, kv)
 		}

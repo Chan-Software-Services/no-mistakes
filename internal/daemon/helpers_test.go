@@ -22,6 +22,11 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// A parent git's repository variables are dropped first, before any helper
+	// mode below, since the daemon tests build repositories with git and the
+	// daemon runs it: under a hook that inherited them, those gits would act
+	// on the contributor's checkout (testgit.DropParentRepoEnv).
+	testgit.DropParentRepoEnv()
 	switch os.Getenv("NM_DAEMON_HELPER_PROCESS") {
 	case "1":
 		if capturePath := os.Getenv("NM_CAPTURE_NM_HOME_FILE"); capturePath != "" {

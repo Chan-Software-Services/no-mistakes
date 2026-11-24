@@ -7,9 +7,15 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps/internal/stepstest"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 )
 
 func TestMain(m *testing.M) {
+	// A parent git's repository variables are dropped first, since these tests
+	// build repositories with git and the steps run it: under a hook that
+	// inherited them, those gits would act on the contributor's checkout
+	// (testgit.DropParentRepoEnv).
+	testgit.DropParentRepoEnv()
 	if handled, exitCode, err := shellenv.RunWindowsCooperativeCommandHelper(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
