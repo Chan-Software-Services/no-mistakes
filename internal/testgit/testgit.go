@@ -17,8 +17,8 @@
 // test run from a hook under a git commit or push can inherit GIT_DIR,
 // GIT_WORK_TREE and GIT_INDEX_FILE, which would point those gits at the
 // contributor's checkout, so a package's TestMain unsets them in the test
-// process (DropParentRepoEnv) and a test that builds a git's environment by
-// hand starts it from Environ.
+// process (DropParentRepoEnv), and Environ gives a test that builds a git's
+// environment by hand the same filter.
 package testgit
 
 import (
