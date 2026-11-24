@@ -147,8 +147,8 @@ func unmarshalRequiredTestFindings(raw []byte, findings *Findings) error {
 				}
 			}
 		}
-		// no-surface is the ask-user park for a change with nothing to drive
-		// live. A pass, fail, or live mark means there was a live-exercisable
+		// no-surface is the verdict for a change with nothing to drive live,
+		// which parks or is skipped without live validation. A pass, fail, or live mark means there was a live-exercisable
 		// scenario, so treating that as no-surface would let a skipped or
 		// failed live validation masquerade as "nothing to test".
 		if *payload.Verdict == types.TestVerdictNoSurface && !types.NoLiveExercisableScenarios(findings.Scenarios) {
