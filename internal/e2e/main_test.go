@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 )
 
 // TestMain recovers any stale temporary-daemon inventory left by a prior
@@ -19,6 +20,11 @@ import (
 // the wrapper shell, and the next suite's pre-reap covers SIGKILL of the
 // wrapper itself via the on-disk inventory.
 func TestMain(m *testing.M) {
+	// A parent git's repository variables are dropped first, since the e2e
+	// tests build repositories with git and start a daemon that runs it: under
+	// a hook that inherited them, those gits would act on the contributor's
+	// checkout (testgit.DropParentRepoEnv).
+	testgit.DropParentRepoEnv()
 	if inv, err := e2edaemon.Open(); err == nil {
 		_ = inv.ReapOrphaned()
 	}

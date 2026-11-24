@@ -7,11 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 )
 
 // Ambient GIT_CONFIG_* injection from agent harnesses would leak into every
 // git call these tests make, so drop it for the package.
 func TestMain(m *testing.M) {
+	// A parent git's repository variables are dropped first, since these tests
+	// build repositories with git and the code under test runs it: under a
+	// hook that inherited them, those gits would act on the contributor's
+	// checkout (testgit.DropParentRepoEnv).
+	testgit.DropParentRepoEnv()
 	os.Unsetenv("GIT_CONFIG_COUNT")
 	os.Exit(m.Run())
 }

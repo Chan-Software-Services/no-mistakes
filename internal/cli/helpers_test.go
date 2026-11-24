@@ -17,6 +17,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 	"github.com/kunchenguid/no-mistakes/internal/testhome"
 )
 
@@ -74,6 +75,11 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
+	// A parent git's repository variables are dropped first, since the CLI
+	// tests build repositories with git and start a daemon that runs it: under
+	// a hook that inherited them, those gits would act on the contributor's
+	// checkout (testgit.DropParentRepoEnv).
+	testgit.DropParentRepoEnv()
 	// The daemon sockets under NM_HOME need a short path, so off Windows the
 	// directories go in /tmp rather than a possibly long TMPDIR.
 	base := ""

@@ -10,9 +10,15 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/runenv"
+	"github.com/kunchenguid/no-mistakes/internal/testgit"
 )
 
 func TestMain(m *testing.M) {
+	// A parent git's repository variables are dropped first, since these tests
+	// build repositories with git and the code under test runs it: under a
+	// hook that inherited them, those gits would act on the contributor's
+	// checkout (testgit.DropParentRepoEnv).
+	testgit.DropParentRepoEnv()
 	dir, err := os.MkdirTemp("", "no-mistakes-git-tests-")
 	if err != nil {
 		panic(err)
