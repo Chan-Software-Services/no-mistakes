@@ -189,3 +189,104 @@ func TestBuildPipelineSummary_ScenarioTableRendersOnBitbucket(t *testing.T) {
 		t.Errorf("expected the scenario table on bitbucket, got:\n%s", md)
 	}
 }
+
+// noSurfaceSkippedFindingsJSON is a Test step payload where the gate recorded
+// test-no-surface-skip in place of the no-surface park: the verdict stays
+// no-surface and the scenarios stay as the agent reported them.
+func noSurfaceSkippedFindingsJSON(t *testing.T) string {
+	t.Helper()
+	raw, err := json.Marshal(types.Findings{
+		Items: []types.Finding{{
+			ID:          types.FindingIDTestNoSurfaceSkip,
+			Severity:    types.FindingSeverityInfo,
+			Action:      types.ActionNoOp,
+			Description: "no live surface, skipped: every changed file matches the trusted test.no_surface_paths (1 file(s): docs/guide.md) and the evidence agent found no live-validatable surface (0 of 1 scenarios were driven live against the product); guide explains the new flag: docs are not executed",
+		}},
+		TestingSummary: "the change is docs only",
+		Scenarios: []types.TestScenario{
+			{Name: "guide explains the new flag", Result: types.ScenarioResultUntested, Reason: "docs are not executed"},
+		},
+		Verdict:       types.TestVerdictNoSurface,
+		TestedHeadSHA: testPipelineHeadSHA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+const noSurfaceSkippedLine = "Live validation: ⏭️ no-surface, skipped - every changed file matches the repository's trusted `test.no_surface_paths` and the evidence agent found nothing to drive live; 0 of 1 scenarios driven live against the product"
+
+const noSurfaceSkippedRow = "| guide explains the new flag | ⏸️ untested | no | docs are not executed |"
+
+func TestBuildTestingSummary_NoSurfaceSkippedLineSaysSkipped(t *testing.T) {
+	t.Parallel()
+	steps, rounds := testStepWithFindings(t, noSurfaceSkippedFindingsJSON(t))
+
+	md := BuildTestingSummary(steps, rounds)
+	if !strings.Contains(md, noSurfaceSkippedLine) {
+		t.Errorf("expected the skipped live-validation line, got:\n%s", md)
+	}
+	if strings.Contains(md, "⚠️ no-surface") {
+		t.Errorf("a gate-recorded skip must not read as the approved no-surface line, got:\n%s", md)
+	}
+	// The scenario table is unchanged by the skip: each untested scenario
+	// keeps the agent's own reason.
+	if !strings.Contains(md, noSurfaceSkippedRow) {
+		t.Errorf("expected the untested scenario row unchanged, got:\n%s", md)
+	}
+}
+
+func TestBuildTestingSummary_NoSurfaceSkippedLineOnPRBodyFlavors(t *testing.T) {
+	t.Parallel()
+	steps, rounds := testStepWithFindings(t, noSurfaceSkippedFindingsJSON(t))
+
+	for _, provider := range []scm.Provider{scm.ProviderGitHub, scm.ProviderBitbucket} {
+		md := BuildTestingSummaryForPRWithProvider(steps, rounds, "", "", "", "", nil, provider)
+		if !strings.Contains(md, noSurfaceSkippedLine) {
+			t.Errorf("%s: expected the skipped live-validation line, got:\n%s", provider, md)
+		}
+		if !strings.Contains(md, noSurfaceSkippedRow) {
+			t.Errorf("%s: expected the untested scenario row unchanged, got:\n%s", provider, md)
+		}
+	}
+}
+
+func TestBuildPipelineSummary_NoSurfaceSkippedFoldShowsSkipAndFinding(t *testing.T) {
+	t.Parallel()
+	steps, rounds := testStepWithFindings(t, noSurfaceSkippedFindingsJSON(t))
+
+	for _, provider := range []scm.Provider{scm.ProviderGitHub, scm.ProviderBitbucket} {
+		md, _ := BuildPipelineSummaryFor(steps, rounds, testPipelineHeadSHA, provider)
+		if provider == scm.ProviderBitbucket && strings.Contains(md, "<details>") {
+			t.Fatalf("bitbucket body must carry no HTML, got:\n%s", md)
+		}
+		for _, want := range []string{
+			noSurfaceSkippedLine,
+			noSurfaceSkippedRow,
+			// The skip finding shows in the fold with the matched files, so a
+			// reviewer can check the gate's reasoning.
+			"no live surface, skipped: every changed file matches the trusted test.no_surface_paths (1 file(s): docs/guide.md)",
+		} {
+			if !strings.Contains(md, want) {
+				t.Errorf("%s: expected the Pipeline fold to contain %q, got:\n%s", provider, want, md)
+			}
+		}
+		if strings.Contains(md, "⚠️ no-surface") {
+			t.Errorf("%s: a gate-recorded skip must not read as the approved no-surface line, got:\n%s", provider, md)
+		}
+	}
+}
+
+// The attestation is the machine reader's half: it reports the same
+// no-surface verdict and counts whether a human or the gate settled it.
+func TestBuildPipelineSummary_NoSurfaceSkippedAttestationUnchanged(t *testing.T) {
+	t.Parallel()
+	steps, rounds := testStepWithFindings(t, noSurfaceSkippedFindingsJSON(t))
+
+	attestation := newPipelineAttestation(steps, rounds, testPipelineHeadSHA, pipelineAttestationPolicy{})
+	want := pipelineAttestationLiveValidation{Verdict: types.TestVerdictNoSurface, Live: 0, Total: 1}
+	if attestation.LiveValidation == nil || *attestation.LiveValidation != want {
+		t.Fatalf("live_validation = %+v, want %+v", attestation.LiveValidation, want)
+	}
+}
