@@ -12,6 +12,13 @@
 // NoAutoMaintenance), and the ways a test turns it off for git calls the code
 // under test makes (TurnOffAutoMaintenance, TurnOffRepoAutoMaintenance) and
 // checks that none started (TraceGit, RequireNoAutoMaintenance).
+//
+// And it keeps a parent git's repository out of the gits a test starts: a go
+// test run from a hook under a git commit or push can inherit GIT_DIR,
+// GIT_WORK_TREE and GIT_INDEX_FILE, which would point those gits at the
+// contributor's checkout, so a package's TestMain unsets them in the test
+// process (DropParentRepoEnv), and Environ gives a test that builds a git's
+// environment by hand the same filter.
 package testgit
 
 import (
