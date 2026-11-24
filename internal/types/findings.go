@@ -167,9 +167,10 @@ const (
 // live-exercisable scenario. It is not a silent skip: the Test step parks
 // for a human to decide whether proceeding without live validation is
 // acceptable, unless the trusted test.no_surface_paths cover every changed
-// file, when it records FindingIDTestNoSurfaceSkip instead. A change that has a live surface and was not driven still
-// uses pass/fail/untested plus go/no-go/inconclusive; claiming no-surface
-// while any scenario is live or pass/fail is a contract violation.
+// file, when it records FindingIDTestNoSurfaceSkip instead. A change that
+// has a live surface and was not driven still uses pass/fail/untested plus
+// go/no-go/inconclusive; claiming no-surface while any scenario is live or
+// pass/fail is a contract violation.
 const (
 	TestVerdictGo           = "go"
 	TestVerdictNoGo         = "no-go"
