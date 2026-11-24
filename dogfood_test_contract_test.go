@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,5 +79,36 @@ func TestCIWorkflow_RetainsFullRaceSuiteAsBroadRegressionOwner(t *testing.T) {
 	content := string(data)
 	if !strings.Contains(content, "run: go test -race ./...") {
 		t.Fatal("CI workflow must still run go test -race ./... as the broad regression owner")
+	}
+}
+
+// The dogfood test.no_surface_paths lists only paths that run in no shipped
+// product. docs/** would cover the shipped installers (docs/install.sh,
+// docs/install.ps1) and .github/actions/** the shipped require-no-mistakes
+// action, so a change to either must still park on a no-surface verdict.
+func TestDogfoodConfig_NoSurfacePathsListOnlyUnshippedPaths(t *testing.T) {
+	t.Parallel()
+
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadRepo(root)
+	if err != nil {
+		t.Fatalf("LoadRepo: %v", err)
+	}
+	want := []string{
+		"docs/src/content/**",
+		".github/workflows/**",
+		".agents/**",
+		"AGENTS.md",
+		"CLAUDE.md",
+		"README.md",
+		"README.zh-CN.md",
+		"CONTRIBUTING.md",
+		"VISION.md",
+	}
+	if !slices.Equal(cfg.Test.NoSurfacePaths, want) {
+		t.Fatalf("dogfood test.no_surface_paths = %q, want %q", cfg.Test.NoSurfacePaths, want)
 	}
 }
